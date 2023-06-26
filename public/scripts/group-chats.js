@@ -142,6 +142,15 @@ async function loadGroupChat(chatId) {
     return [];
 }
 
+function getGroupMemberBindName1(group, character) {
+    if (character.avatar in group.bindings) {
+        const bind_avatar = group.bindings[character.avatar];
+        const matching_char = characters.find((y) => y.avatar === bind_avatar)
+        return matching_char ? matching_char.name : name1;
+    }
+    return name1
+}
+
 export async function getGroupChat(groupId) {
     const group = groups.find((x) => x.id === groupId);
     const chat_id = group.chat_id;
@@ -163,7 +172,7 @@ export async function getGroupChat(groupId) {
                     continue;
                 }
 
-                const mes = getFirstCharacterMessage(character);
+                const mes = getFirstCharacterMessage(group, character);
                 chat.push(mes);
                 addOneMessage(mes);
             }
@@ -179,7 +188,7 @@ export async function getGroupChat(groupId) {
     eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
 }
 
-function getFirstCharacterMessage(character) {
+function getFirstCharacterMessage(group, character) {
     let messageText = character.first_mes;
 
     // if there are alternate greetings, pick one at random
@@ -197,7 +206,7 @@ function getFirstCharacterMessage(character) {
     mes["original_avatar"] = character.avatar;
     mes["extra"] = { "gen_id": Date.now() * Math.random() * 1000000 };
     mes["mes"] = messageText
-        ? substituteParams(messageText.trim(), name1, character.name)
+        ? substituteParams(messageText.trim(), getGroupMemberBindName1(group, character), character.name)
         : default_ch_mes;
     mes["force_avatar"] =
         character.avatar != "none"
@@ -321,6 +330,9 @@ async function getGroups() {
             }
             if (Array.isArray(group.chats) && group.chats.some(x => typeof x === 'number')) {
                 group.chats = group.chats.map(x => String(x));
+            }
+            if (group.bindings == undefined) {
+                group.bindings = {};
             }
         }
     }
@@ -525,9 +537,10 @@ async function generateGroupWrapper(by_auto_mode, type = null, params = {}) {
             isGenerationDone = false;
             const generateType = type == "swipe" || type == "impersonate" || type == "quiet" ? type : "group_chat";
             setCharacterId(chId);
-            setCharacterName(characters[chId].name)
+            setCharacterName(characters[chId].name);
 
-            await Generate(generateType, { automatic_trigger: by_auto_mode, ...(params || {}) });
+            await Generate(generateType, { override_name1: getGroupMemberBindName1(group, characters[chId]), automatic_trigger: by_auto_mode, ...(params || {}) });
+
 
             if (type !== "swipe" && type !== "impersonate" && !isMultigenEnabled() && !isStreamingEnabled()) {
                 // update indicator and scroll down
@@ -881,6 +894,8 @@ async function modifyGroupMember(chat_id, groupMember, isDelete) {
     groupMember.remove();
     const groupHasMembers = !!$("#rm_group_members").children().length;
     $("#rm_group_submit").prop("disabled", !groupHasMembers);
+
+    recalculate_group_bind_options(_thisGroup);
 }
 
 async function reorderGroupMember(chat_id, groupMember, direction) {
@@ -919,6 +934,47 @@ async function reorderGroupMember(chat_id, groupMember, direction) {
             groupMember.insertBefore(groupMember.prev());
         }
     }
+}
+
+function recalculate_group_bind_options(group) {
+    const member_list = $("#rm_group_members").children();
+    // well this is just awful. what's wrong with normal, easy-to-read for-loops?
+    member_list.each(function () {
+        const thischar = characters[$(this).attr('chid')];
+        const binding_dropdown = $(this).find("#bind-user-dropdown");
+        let selected_value = $(binding_dropdown).find(":selected").val();
+        if (group && 
+            'bindings' in group && 
+            thischar.avatar in group.bindings) {
+            selected_value = "member-" + group.bindings[thischar.avatar];
+        }
+        if (!selected_value) {
+            selected_value = 'default'
+        }
+        binding_dropdown.empty();
+        binding_dropdown.append(`<option value="default" ${selected_value==='default'?'selected':''}>Bind to User</option>`);
+
+        // get 'selected' first, then empty the options, then re-assign the 'selected' value? What about the default option?
+        member_list.each(function() {
+            const sibchar = characters[$(this).attr('chid')];
+            if (thischar !== sibchar) {
+                const is_selected = selected_value.substring(7)===sibchar.avatar ? 'selected' : '';
+                binding_dropdown.append(`<option value="member-${sibchar.avatar}" ${is_selected}>Bind to "${sibchar.name}"</option>`);
+            }
+        });
+    });
+}
+function collect_group_binds() {
+    let bindings = {};
+    $("#rm_group_members").children().each(function () {
+        const thischar = characters[$(this).attr('chid')];
+        const binding_dropdown = $(this).find("#bind-user-dropdown");
+        let selected_value = $(binding_dropdown).find(":selected").val();
+        if (selected_value && selected_value !== 'default') {
+            bindings[thischar.avatar] = selected_value.substring(7);
+        }
+    });
+    return bindings;
 }
 
 function select_group_chats(groupId, skipAnimation) {
@@ -984,6 +1040,8 @@ function select_group_chats(groupId, skipAnimation) {
             $("#rm_group_add_members").append(template);
         }
     }
+
+    recalculate_group_bind_options(group)
 
     sortGroupMembers("#rm_group_add_members .group_member");
     filterMembersByFavorites(false);
@@ -1098,6 +1156,22 @@ function select_group_chats(groupId, skipAnimation) {
         sortGroupMembers("#rm_group_add_members .group_member");
         await eventSource.emit(event_types.GROUP_UPDATED);
     });
+
+    $(document).off("change", ".group_member #bind-user-dropdown");
+    $(document).on("change", ".group_member #bind-user-dropdown", async function (event) {
+        const _thisGroup = groups.find(x => x.id === groupId);
+        if (_thisGroup) {
+            const member = $(this).closest('.group_member');
+            const character = characters[member.attr('chid')];
+            let target = $(event.target.selectedOptions).val();
+            if (target === 'default') { // Default keyword bindings
+                delete _thisGroup.bindings[character.avatar]
+            } else { // Group-member keyword bindings
+                _thisGroup.bindings[character.avatar] = target.substring(7); //'member-<member_id>'
+            }
+            await editGroup(groupId);
+        }
+    });
 }
 
 function updateFavButtonState(state) {
@@ -1169,6 +1243,7 @@ async function createGroup() {
         .toArray();
 
     const memberNames = characters.filter(x => members.includes(x.avatar)).map(x => x.name).join(", ");
+    const bindings = collect_group_binds();
 
     if (!name) {
         name = `Group: ${memberNames}`;
@@ -1186,6 +1261,7 @@ async function createGroup() {
         body: JSON.stringify({
             name: name,
             members: members,
+            bindings: bindings,
             avatar_url: avatar_url,
             allow_self_responses: allow_self_responses,
             activation_strategy: activation_strategy,

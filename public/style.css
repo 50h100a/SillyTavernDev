@@ -3108,6 +3108,11 @@ body .ui-widget-content li:hover {
     opacity: 0.8;
 }
 
+/* Rules for binding display */
+#rm_group_add_members .group_binding_select {
+    display: none;
+}
+
 .group_member_icon {
     display: flex;
     column-gap: 10px;
@@ -3125,12 +3130,17 @@ body .ui-widget-content li:hover {
     border-radius: 10px;
 }
 
+.group_member .group_member_info {
+    width: 100%;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+
 .group_member .ch_name {
     flex-grow: 1;
-    margin-left: 10px;
     overflow: hidden;
     text-overflow: ellipsis;
-    width: calc(100% - 110px);
+    width: 100%;
     display: flex;
     align-items: center;
     gap: 5px;

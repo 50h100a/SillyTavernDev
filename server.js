@@ -2286,6 +2286,7 @@ app.post('/creategroup', jsonParser, (request, response) => {
         id: id,
         name: request.body.name ?? 'New Group',
         members: request.body.members ?? [],
+        bindings: request.body.bindings ?? {},
         avatar_url: request.body.avatar_url,
         allow_self_responses: !!request.body.allow_self_responses,
         activation_strategy: request.body.activation_strategy ?? 0,

@@ -1554,17 +1554,17 @@ function cleanGroupMessage(getMessage) {
     return getMessage;
 }
 
-function getAllExtensionPrompts() {
+function getAllExtensionPrompts(_name1, _name2) {
     const value = Object
         .values(extension_prompts)
         .filter(x => x.value)
         .map(x => x.value.trim())
         .join('\n');
 
-    return value.length ? substituteParams(value) : '';
+    return value.length ? substituteParams(value, _name1, _name2) : '';
 }
 
-function getExtensionPrompt(position = 0, depth = undefined, separator = "\n") {
+function getExtensionPrompt(_name1, _name2, position = 0, depth = undefined, separator = "\n") {
     let extension_prompt = Object.keys(extension_prompts)
         .sort()
         .map((x) => extension_prompts[x])
@@ -1578,7 +1578,7 @@ function getExtensionPrompt(position = 0, depth = undefined, separator = "\n") {
         extension_prompt = extension_prompt + separator;
     }
     if (extension_prompt.length) {
-        extension_prompt = substituteParams(extension_prompt);
+        extension_prompt = substituteParams(extension_prompt, _name1, _name2);
     }
     return extension_prompt;
 }
@@ -1837,7 +1837,7 @@ class StreamingProcessor {
     }
 }
 
-async function Generate(type, { automatic_trigger, force_name2, resolve, reject, quiet_prompt, force_chid, signal } = {}) {
+async function Generate(type, { automatic_trigger, force_name2, resolve, reject, quiet_prompt, force_chid, signal, override_name1 } = {}) {
     //console.log('Generate entered');
     setGenerationProgress(0);
     tokens_already_generated = 0;
@@ -1848,16 +1848,19 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         abortController = new AbortController();
     }
 
+    const _name1 = override_name1 ?? name1;
+    const _name2 = name2;
+
     // OpenAI doesn't need instruct mode. Use OAI main prompt instead.
     const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
     const isImpersonate = type == "impersonate";
 
-    message_already_generated = isImpersonate ? `${name1}: ` : `${name2}: `;
+    message_already_generated = isImpersonate ? `${_name1}: ` : `${_name2}: `;
     // Name for the multigen prefix
-    const magName = isImpersonate ? (is_pygmalion ? 'You' : name1) : name2;
+    const magName = isImpersonate ? (is_pygmalion ? 'You' : _name1) : _name2;
 
     if (isInstruct) {
-        message_already_generated = formatInstructModePrompt(magName, isImpersonate, false, name1, name2);
+        message_already_generated = formatInstructModePrompt(magName, isImpersonate, false, _name1, _name2);
     } else {
         message_already_generated = `${magName}: `;
     }
@@ -1881,6 +1884,8 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
 
     if (main_api == 'kobold' && kai_settings.streaming_kobold && !kai_settings.can_use_streaming) {
         toastr.warning('Streaming is enabled, but the version of Kobold used does not support token streaming.', undefined, { timeOut: 10000, preventDuplicates: true, });
+        is_send_press = false;
+        return;
     }
 
     if (main_api == 'kobold' && kai_settings.streaming_kobold && power_user.multigen) {
@@ -1958,12 +1963,12 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
 
         ////////////////////////////////////
         const scenarioText = chat_metadata['scenario'] || characters[this_chid].scenario;
-        let charDescription = baseChatReplace(characters[this_chid].description.trim(), name1, name2);
-        let charPersonality = baseChatReplace(characters[this_chid].personality.trim(), name1, name2);
-        let Scenario = baseChatReplace(scenarioText.trim(), name1, name2);
-        let mesExamples = baseChatReplace(characters[this_chid].mes_example.trim(), name1, name2);
-        let systemPrompt = baseChatReplace(characters[this_chid].data?.system_prompt?.trim(), name1, name2);
-        let jailbreakPrompt = baseChatReplace(characters[this_chid].data?.post_history_instructions?.trim(), name1, name2);
+        let charDescription = baseChatReplace(characters[this_chid].description.trim(), _name1, _name2);
+        let charPersonality = baseChatReplace(characters[this_chid].personality.trim(), _name1, _name2);
+        let Scenario = baseChatReplace(scenarioText.trim(), _name1, _name2);
+        let mesExamples = baseChatReplace(characters[this_chid].mes_example.trim(), _name1, _name2);
+        let systemPrompt = baseChatReplace(characters[this_chid].data?.system_prompt?.trim(), _name1, _name2);
+        let jailbreakPrompt = baseChatReplace(characters[this_chid].data?.post_history_instructions?.trim(), _name1, _name2);
 
         // Parse example messages
         if (!mesExamples.startsWith('<START>')) {
@@ -1976,12 +1981,12 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             main_api === 'openai' ? '<START>' : // OpenAI handler always expects it
                 power_user.custom_chat_separator ? power_user.custom_chat_separator :
                     power_user.disable_examples_formatting ? '' :
-                        is_pygmalion ? '<START>' : `This is how ${name2} should talk`;
+                        is_pygmalion ? '<START>' : `This is how ${_name2} should talk`;
         let mesExamplesArray = mesExamples.split(/<START>/gi).slice(1).map(block => `${blockHeading}\n${block.trim()}\n`);
 
         // First message in fresh 1-on-1 chat reacts to user/character settings changes
         if (chat.length) {
-            chat[0].mes = substituteParams(chat[0].mes);
+            chat[0].mes = substituteParams(chat[0].mes, _name1, _name2);
         }
 
         // Collect messages with usable content
@@ -2007,12 +2012,12 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         let storyString = "";
 
         if (is_pygmalion) {
-            storyString += appendToStoryString(charDescription, power_user.disable_description_formatting ? '' : name2 + "'s Persona: ");
+            storyString += appendToStoryString(charDescription, power_user.disable_description_formatting ? '' : _name2 + "'s Persona: ");
             storyString += appendToStoryString(charPersonality, power_user.disable_personality_formatting ? '' : 'Personality: ');
             storyString += appendToStoryString(Scenario, power_user.disable_scenario_formatting ? '' : 'Scenario: ');
         } else {
             storyString += appendToStoryString(charDescription, '');
-            storyString += appendToStoryString(charPersonality, power_user.disable_personality_formatting ? '' : name2 + "'s personality: ");
+            storyString += appendToStoryString(charPersonality, power_user.disable_personality_formatting ? '' : _name2 + "'s personality: ");
             storyString += appendToStoryString(Scenario, power_user.disable_scenario_formatting ? '' : 'Circumstances and context of the dialogue: ');
         }
 
@@ -2061,11 +2066,11 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         // Set non-WI AN
         setFloatingPrompt();
         // Add WI to prompt (and also inject WI to AN value via hijack)
-        let { worldInfoString, worldInfoBefore, worldInfoAfter } = await getWorldInfoPrompt(chat2, this_max_context);
+        let { worldInfoString, worldInfoBefore, worldInfoAfter } = await getWorldInfoPrompt(chat2, this_max_context, _name1, _name2);
         // Call combined AN into Generate
-        let allAnchors = getAllExtensionPrompts();
-        const afterScenarioAnchor = getExtensionPrompt(extension_prompt_types.AFTER_SCENARIO);
-        let zeroDepthAnchor = getExtensionPrompt(extension_prompt_types.IN_CHAT, 0, ' ');
+        let allAnchors = getAllExtensionPrompts(_name1, _name2);
+        const afterScenarioAnchor = getExtensionPrompt(_name1, _name2, extension_prompt_types.AFTER_SCENARIO);
+        let zeroDepthAnchor = getExtensionPrompt(_name1, _name2, extension_prompt_types.IN_CHAT, 0, ' ');
 
         // Moved here to not overflow the Poe context with added prompt bits
         if (main_api == 'poe') {
@@ -2162,7 +2167,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                         return;
                     }
 
-                    if (i === arrMes.length - 1 && !item.trim().startsWith(name1 + ":")) {
+                    if (i === arrMes.length - 1 && !item.trim().startsWith(_name1 + ":")) {
                         if (textareaText == "") {
                             // Cohee: I think this was added to allow the model to continue
                             // where it left off by removing the trailing newline at the end
@@ -2174,15 +2179,15 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                         }
                     }
                     if (is_pygmalion && !isInstruct) {
-                        if (item.trim().startsWith(name1)) {
-                            item = item.replace(name1 + ':', 'You:');
+                        if (item.trim().startsWith(_name1)) {
+                            item = item.replace(_name1 + ':', 'You:');
                         }
                     }
 
                     if (i === 0) {
                         // Process those that couldn't get that far
                         for (let upperDepth = 100; upperDepth >= arrMes.length; upperDepth--) {
-                            const upperAnchor = getExtensionPrompt(extension_prompt_types.IN_CHAT, upperDepth);
+                            const upperAnchor = getExtensionPrompt(_name1, _name2, extension_prompt_types.IN_CHAT, upperDepth);
                             if (upperAnchor && upperAnchor.length) {
                                 item = upperAnchor + item;
                             }
@@ -2190,7 +2195,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                     }
 
                     const anchorDepth = Math.abs(i - arrMes.length + 1);
-                    const extensionAnchor = getExtensionPrompt(extension_prompt_types.IN_CHAT, anchorDepth);
+                    const extensionAnchor = getExtensionPrompt(_name1, _name2, extension_prompt_types.IN_CHAT, anchorDepth);
 
                     if (anchorDepth > 0 && extensionAnchor && extensionAnchor.length) {
                         item += extensionAnchor;
@@ -2224,20 +2229,20 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             function modifyLastPromptLine(mesSendString) {
                 // Add quiet generation prompt at depth 0
                 if (quiet_prompt && quiet_prompt.length) {
-                    const name = is_pygmalion ? 'You' : name1;
-                    const quietAppend = isInstruct ? formatInstructModeChat(name, quiet_prompt, false, true, false, name1, name2) : `\n${name}: ${quiet_prompt}`;
+                    const name = is_pygmalion ? 'You' : _name1;
+                    const quietAppend = isInstruct ? formatInstructModeChat(name, quiet_prompt, false, true, false, _name1, _name2) : `\n${name}: ${quiet_prompt}`;
                     mesSendString += quietAppend;
                 }
 
                 // Get instruct mode line
                 if (isInstruct && tokens_already_generated === 0) {
-                    const name = isImpersonate ? (is_pygmalion ? 'You' : name1) : name2;
-                    mesSendString += formatInstructModePrompt(name, isImpersonate, promptBias, name1, name2);
+                    const name = isImpersonate ? (is_pygmalion ? 'You' : _name1) : _name2;
+                    mesSendString += formatInstructModePrompt(name, isImpersonate, promptBias, _name1, _name2);
                 }
 
                 // Get non-instruct impersonation line
                 if (!isInstruct && isImpersonate && tokens_already_generated === 0) {
-                    const name = is_pygmalion ? 'You' : name1;
+                    const name = is_pygmalion ? 'You' : _name1;
                     if (!mesSendString.endsWith('\n')) {
                         mesSendString += '\n';
                     }
@@ -2249,7 +2254,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                     if (!mesSendString.endsWith('\n')) {
                         mesSendString += '\n';
                     }
-                    mesSendString += (`${name2}:${promptBias || ''}`);
+                    mesSendString += (`${_name2}:${promptBias || ''}`);
                 }
 
                 return mesSendString;
@@ -2292,7 +2297,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             }
 
             // add a custom dingus (if defined)
-            mesSendString = adjustChatsSeparator(mesSendString);
+            mesSendString = adjustChatsSeparator(mesSendString, _name1, _name2);
 
             let finalPromt =
                 worldInfoBefore +
@@ -2355,7 +2360,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             else if (main_api == 'openai') {
                 let [prompt, counts] = await prepareOpenAIMessages({
                     systemPrompt: systemPrompt,
-                    name2: name2,
+                    name2: _name2,
                     storyString: storyString,
                     worldInfoBefore: worldInfoBefore,
                     worldInfoAfter: worldInfoAfter,
@@ -2753,7 +2758,7 @@ function parseTokenCounts(counts, thisPromptBits) {
     });
 }
 
-function adjustChatsSeparator(mesSendString) {
+function adjustChatsSeparator(mesSendString, _name1, _name2) {
     if (power_user.custom_chat_separator && power_user.custom_chat_separator.length) {
         mesSendString = power_user.custom_chat_separator + '\n' + mesSendString;
     }
@@ -2765,7 +2770,7 @@ function adjustChatsSeparator(mesSendString) {
 
     // add non-pygma dingus
     else if (!is_pygmalion) {
-        mesSendString = '\nThen the roleplay chat between ' + name1 + ' and ' + name2 + ' begins.\n' + mesSendString;
+        mesSendString = '\nThen the roleplay chat between ' + _name1 + ' and ' + _name2 + ' begins.\n' + mesSendString;
     }
 
     // add pygma <START>

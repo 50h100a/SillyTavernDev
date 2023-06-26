@@ -47,10 +47,10 @@ const world_info_position = {
 
 const worldInfoCache = {};
 
-async function getWorldInfoPrompt(chat2, maxContext) {
+async function getWorldInfoPrompt(chat2, maxContext, _name1, _name2) {
     let worldInfoString = "", worldInfoBefore = "", worldInfoAfter = "";
 
-    const activatedWorldInfo = await checkWorldInfo(chat2, maxContext);
+    const activatedWorldInfo = await checkWorldInfo(chat2, maxContext, _name1, _name2);
     worldInfoBefore = activatedWorldInfo.worldInfoBefore;
     worldInfoAfter = activatedWorldInfo.worldInfoAfter;
     worldInfoString = worldInfoBefore + worldInfoAfter;
@@ -758,7 +758,7 @@ async function getSortedEntries() {
     }
 }
 
-async function checkWorldInfo(chat, maxContext) {
+async function checkWorldInfo(chat, maxContext, _name1, _name2) {
     const context = getContext();
     const messagesToLookBack = world_info_depth * 2 || 1;
     let textToScan = transformString(chat.slice(0, messagesToLookBack).join(""));
@@ -792,7 +792,7 @@ async function checkWorldInfo(chat, maxContext) {
 
             if (Array.isArray(entry.key) && entry.key.length) {
                 primary: for (let key of entry.key) {
-                    const substituted = substituteParams(key);
+                    const substituted = substituteParams(key, _name1, _name2);
                     if (substituted && matchKeys(textToScan, substituted.trim())) {
                         if (
                             entry.selective &&
@@ -800,7 +800,7 @@ async function checkWorldInfo(chat, maxContext) {
                             entry.keysecondary.length
                         ) {
                             secondary: for (let keysecondary of entry.keysecondary) {
-                                const secondarySubstituted = substituteParams(keysecondary);
+                                const secondarySubstituted = substituteParams(keysecondary, _name1, _name2);
                                 if (secondarySubstituted && matchKeys(textToScan, secondarySubstituted.trim())) {
                                     activatedNow.add(entry);
                                     break secondary;
@@ -821,7 +821,7 @@ async function checkWorldInfo(chat, maxContext) {
         let newContent = "";
 
         for (const entry of newEntries) {
-            newContent += `${substituteParams(entry.content)}\n`;
+            newContent += `${substituteParams(entry.content, _name1, _name2)}\n`;
 
             if (getTokenCount(textToScan + newContent) >= budget) {
                 console.debug(`WI budget reached, stopping`);

@@ -228,7 +228,7 @@ function setOpenAIMessages(chat) {
 
     // Add chat injections, 100 = maximum depth of injection. (Why would you ever need more?)
     for (let i = 0; i < 100; i++) {
-        const anchor = getExtensionPrompt(extension_prompt_types.IN_CHAT, i);
+        const anchor = getExtensionPrompt(name1, name2, extension_prompt_types.IN_CHAT, i);
 
         if (anchor && anchor.length) {
             openai_msgs.splice(i, 0, { "role": 'system', 'content': anchor.trim() })
