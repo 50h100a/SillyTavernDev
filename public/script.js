@@ -30,6 +30,8 @@ import {
     world_names,
     world_info_character_strategy,
     importEmbeddedWorldInfo,
+    checkEmbeddedWorld,
+    setWorldInfoButtonClass,
 } from "./scripts/world-info.js";
 
 import {
@@ -69,6 +71,7 @@ import {
     formatInstructModeChat,
     formatInstructStoryString,
     formatInstructModePrompt,
+    persona_description_positions,
 } from "./scripts/power-user.js";
 
 import {
@@ -128,6 +131,7 @@ import {
     timestampToMoment,
     download,
     isDataURL,
+    getCharaFilename,
 } from "./scripts/utils.js";
 
 import { extension_settings, loadExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from "./scripts/extensions.js";
@@ -151,7 +155,8 @@ import {
 import { EventEmitter } from './scripts/eventemitter.js';
 import { context_settings, loadContextTemplatesFromSettings } from "./scripts/context-template.js";
 import { markdownExclusionExt } from "./scripts/showdown-exclusion.js";
-import { setFloatingPrompt } from "./scripts/extensions/floating-prompt/index.js";
+import { NOTE_MODULE_NAME, metadata_keys, setFloatingPrompt, shouldWIAddPrompt } from "./scripts/extensions/floating-prompt/index.js";
+import { deviceInfo } from "./scripts/RossAscends-mods.js";
 
 //exporting functions and vars for mods
 export {
@@ -273,7 +278,7 @@ let is_mes_reload_avatar = false;
 let optionsPopper = Popper.createPopper(document.getElementById('options_button'), document.getElementById('options'), {
     placement: 'top-start'
 });
-let exportPopper = Popper.createPopper(document.getElementById('char-management-dropdown'), document.getElementById('export_format_popup'), {
+let exportPopper = Popper.createPopper(document.getElementById('export_button'), document.getElementById('export_format_popup'), {
     placement: 'left'
 });
 let rawPromptPopper = Popper.createPopper(document.getElementById('dialogue_popup'), document.getElementById('rawPromptPopup'), {
@@ -292,7 +297,7 @@ let currentCroppedAvatar = '';
 
 const durationSaveEdit = 1000;
 const saveSettingsDebounced = debounce(() => saveSettings(), durationSaveEdit);
-const saveCharacterDebounced = debounce(() => $("#create_button").trigger('click'), durationSaveEdit);
+export const saveCharacterDebounced = debounce(() => $("#create_button").trigger('click'), durationSaveEdit);
 const getStatusDebounced = debounce(() => getStatus(), 300_000);
 const saveChatDebounced = debounce(() => saveChatConditional(), durationSaveEdit);
 
@@ -798,6 +803,7 @@ async function printCharacters() {
         template.find('img').attr('src', this_avatar);
         template.find('.avatar').attr('title', item.avatar);
         template.find('.ch_name').text(item.name);
+        template.find('.ch_avatar_url').text(item.avatar);
         template.find('.ch_fav_icon').css("display", 'none');
         template.toggleClass('is_fav', item.fav || item.fav == 'true');
         template.find('.ch_fav').val(item.fav);
@@ -1554,6 +1560,28 @@ function cleanGroupMessage(getMessage) {
     return getMessage;
 }
 
+function getPersonaDescription(storyString) {
+    if (!power_user.persona_description) {
+        return storyString;
+    }
+
+    switch (power_user.persona_description_position) {
+        case persona_description_positions.BEFORE_CHAR:
+            return `${substituteParams(power_user.persona_description)}\n${storyString}`;
+        case persona_description_positions.AFTER_CHAR:
+            return `${storyString}\n${substituteParams(power_user.persona_description)}`;
+        default:
+            if (shouldWIAddPrompt) {
+                const originalAN = extension_prompts[NOTE_MODULE_NAME].value
+                const ANWithDesc = persona_description_positions.TOP_AN
+                    ? `${power_user.persona_description}\n${originalAN}`
+                    : `${originalAN}\n${power_user.persona_description}`;
+                setExtensionPrompt(NOTE_MODULE_NAME, ANWithDesc, chat_metadata[metadata_keys.position], chat_metadata[metadata_keys.depth]);
+            }
+            return storyString;
+    }
+}
+
 function getAllExtensionPrompts(_name1, _name2) {
     const value = Object
         .values(extension_prompts)
@@ -2003,12 +2031,6 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             console.log(`Core/all messages: ${coreChat.length}/${chat.length}`);
         }
 
-        if (main_api === 'openai') {
-            message_already_generated = ''; // OpenAI doesn't have multigen
-            setOpenAIMessages(coreChat);
-            setOpenAIMessageExamples(mesExamplesArray);
-        }
-
         let storyString = "";
 
         if (is_pygmalion) {
@@ -2038,7 +2060,7 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         let chat2 = [];
         for (let i = coreChat.length - 1, j = 0; i >= 0; i--, j++) {
             // For OpenAI it's only used in WI
-            if (main_api == 'openai' && !world_info) {
+            if (main_api == 'openai' && (!world_info || world_info.length === 0)) {
                 console.debug('No WI, skipping chat2 for OAI');
                 break;
             }
@@ -2067,10 +2089,18 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
         setFloatingPrompt();
         // Add WI to prompt (and also inject WI to AN value via hijack)
         let { worldInfoString, worldInfoBefore, worldInfoAfter } = await getWorldInfoPrompt(chat2, this_max_context, _name1, _name2);
+        // Add persona description to prompt
+        storyString = getPersonaDescription(storyString);
         // Call combined AN into Generate
         let allAnchors = getAllExtensionPrompts(_name1, _name2);
         const afterScenarioAnchor = getExtensionPrompt(_name1, _name2, extension_prompt_types.AFTER_SCENARIO);
         let zeroDepthAnchor = getExtensionPrompt(_name1, _name2, extension_prompt_types.IN_CHAT, 0, ' ');
+
+        if (main_api === 'openai') {
+            message_already_generated = ''; // OpenAI doesn't have multigen
+            setOpenAIMessages(coreChat);
+            setOpenAIMessageExamples(mesExamplesArray);
+        }
 
         // Moved here to not overflow the Poe context with added prompt bits
         if (main_api == 'poe') {
@@ -3747,7 +3777,7 @@ async function read_avatar_load(input) {
     }
 }
 
-function getCropPopup(src) {
+export function getCropPopup(src) {
     return `<h3>Set the crop position of the avatar image and click Ok to confirm.</h3>
             <div id='avatarCropWrap'>
                 <img id='avatarToCrop' src='${src}'>
@@ -3959,8 +3989,6 @@ function changeMainAPI() {
 ////////////////////////////////////////////////////
 
 async function getUserAvatars() {
-    $("#user_avatar_block").html(""); //RossAscends: necessary to avoid doubling avatars each refresh.
-    $("#user_avatar_block").append('<div class="avatar_upload">+</div>');
     const response = await fetch("/getuseravatars", {
         method: "POST",
         headers: getRequestHeaders(),
@@ -3972,6 +4000,8 @@ async function getUserAvatars() {
         const getData = await response.json();
         //background = getData;
         //console.log(getData.length);
+        $("#user_avatar_block").html(""); //RossAscends: necessary to avoid doubling avatars each refresh.
+        $("#user_avatar_block").append('<div class="avatar_upload">+</div>');
 
         for (var i = 0; i < getData.length; i++) {
             //console.log(1);
@@ -3980,6 +4010,56 @@ async function getUserAvatars() {
         //var aa = JSON.parse(getData[0]);
         //const load_ch_coint = Object.getOwnPropertyNames(getData);
     }
+}
+
+function setPersonaDescription() {
+    $("#persona_description").val(power_user.persona_description);
+    $("#persona_description_position")
+        .val(power_user.persona_description_position)
+        .find(`option[value='${power_user.persona_description_position}']`)
+        .attr("selected", true);
+}
+
+function onPersonaDescriptionPositionInput() {
+    power_user.persona_description_position = Number(
+        $("#persona_description_position").find(":selected").val()
+    );
+
+    if (power_user.personas[user_avatar]) {
+        let object = power_user.persona_descriptions[user_avatar];
+
+        if (!object) {
+            object = {
+                description: power_user.persona_description,
+                position: power_user.persona_description_position,
+            };
+            power_user.persona_descriptions[user_avatar] = object;
+        }
+
+        object.position = power_user.persona_description_position;
+    }
+
+    saveSettingsDebounced();
+}
+
+function onPersonaDescriptionInput() {
+    power_user.persona_description = $("#persona_description").val();
+
+    if (power_user.personas[user_avatar]) {
+        let object = power_user.persona_descriptions[user_avatar];
+
+        if (!object) {
+            object = {
+                description: power_user.persona_description,
+                position: Number($("#persona_description_position").find(":selected").val()),
+            };
+            power_user.persona_descriptions[user_avatar] = object;
+        }
+
+        object.description = power_user.persona_description;
+    }
+
+    saveSettingsDebounced();
 }
 
 function highlightSelectedAvatar() {
@@ -4004,12 +4084,15 @@ function appendUserAvatar(name) {
     highlightSelectedAvatar();
 }
 
-function reloadUserAvatar() {
+function reloadUserAvatar(force = false) {
     $(".mes").each(function () {
+        const avatarImg = $(this).find(".avatar img");
+        if (force) {
+            avatarImg.attr("src", avatarImg.attr("src"));
+        }
+
         if ($(this).attr("is_user") == 'true' && $(this).attr('force_avatar') == 'false') {
-            $(this)
-                .find(".avatar img")
-                .attr("src", getUserAvatar(user_avatar));
+            avatarImg.attr("src", getUserAvatar(user_avatar));
         }
     });
 }
@@ -4058,9 +4141,20 @@ async function bindUserNameToPersona() {
         // If the user clicked ok and entered a name, bind the name to the persona
         console.log(`Binding persona ${avatarId} to name ${personaName}`);
         power_user.personas[avatarId] = personaName;
+        const descriptor = power_user.persona_descriptions[avatarId];
+        const isCurrentPersona = avatarId === user_avatar;
+
+        // Create a description object if it doesn't exist
+        if (!descriptor) {
+            // If the user is currently using this persona, set the description to the current description
+            power_user.persona_descriptions[avatarId] = {
+                description: isCurrentPersona ? power_user.persona_description : '',
+                position: isCurrentPersona ? power_user.persona_description_position : persona_description_positions.BEFORE_CHAR,
+            };
+        }
 
         // If the user is currently using this persona, update the name
-        if (avatarId === user_avatar) {
+        if (isCurrentPersona) {
             console.log(`Auto-updating user name to ${personaName}`);
             setUserName(personaName);
         }
@@ -4068,16 +4162,39 @@ async function bindUserNameToPersona() {
         // If the user clicked ok, but didn't enter a name, delete the persona
         console.log(`Unbinding persona ${avatarId}`);
         delete power_user.personas[avatarId];
+        delete power_user.persona_descriptions[avatarId];
     }
 
     saveSettingsDebounced();
     await getUserAvatars();
+    setPersonaDescription();
+}
+
+async function createDummyPersona() {
+    const fetchResult = await fetch(default_avatar);
+    const blob = await fetchResult.blob();
+    const file = new File([blob], "avatar.png", { type: "image/png" });
+    const formData = new FormData();
+    formData.append("avatar", file);
+
+    jQuery.ajax({
+        type: "POST",
+        url: "/uploaduseravatar",
+        data: formData,
+        beforeSend: () => { },
+        cache: false,
+        contentType: false,
+        processData: false,
+        success: async function (data) {
+            await getUserAvatars();
+        },
+    });
 }
 
 function updateUserLockIcon() {
     const hasLock = !!chat_metadata['persona'];
-    $('#lock_user_name').toggleClass('fa-lock', !hasLock);
-    $('#lock_user_name').toggleClass('fa-unlock', hasLock);
+    $('#lock_user_name').toggleClass('fa-unlock', !hasLock);
+    $('#lock_user_name').toggleClass('fa-lock', hasLock);
 }
 
 function setUserAvatar() {
@@ -4098,12 +4215,75 @@ function setUserAvatar() {
         }
 
         setUserName(personaName);
+
+        const descriptor = power_user.persona_descriptions[user_avatar];
+
+        if (descriptor) {
+            power_user.persona_description = descriptor.description;
+            power_user.persona_description_position = descriptor.position;
+        } else {
+            power_user.persona_description = '';
+            power_user.persona_description_position = persona_description_positions.BEFORE_CHAR;
+            power_user.persona_descriptions[user_avatar] = { description: '', position: persona_description_positions.BEFORE_CHAR };
+        }
+
+        setPersonaDescription();
     }
 }
 
-async function setUserInfo() {
-    // TODO Replace with actual implementation
-    callPopup('This functionality is under development.<br>Please check back later.', 'text');
+async function uploadUserAvatar(e) {
+    const file = e.target.files[0];
+
+    if (!file) {
+        $("#form_upload_avatar").trigger("reset");
+        return;
+    }
+
+    const formData = new FormData($("#form_upload_avatar").get(0));
+
+    const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = resolve;
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+    $('#dialogue_popup').addClass('large_dialogue_popup wide_dialogue_popup');
+    const confirmation = await callPopup(getCropPopup(dataUrl.target.result), 'avatarToCrop');
+    if (!confirmation) {
+        return;
+    }
+
+    let url = "/uploaduseravatar";
+
+    if (crop_data !== undefined) {
+        url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
+    }
+
+    jQuery.ajax({
+        type: "POST",
+        url: url,
+        data: formData,
+        beforeSend: () => { },
+        cache: false,
+        contentType: false,
+        processData: false,
+        success: async function () {
+            // If the user uploaded a new avatar, we want to make sure it's not cached
+            const name = formData.get("overwrite_name");
+            if (name) {
+                await fetch(getUserAvatar(name), { cache: "no-cache" });
+                reloadUserAvatar(true);
+            }
+
+            crop_data = undefined;
+            await getUserAvatars();
+        },
+        error: (jqXHR, exception) => { },
+    });
+
+    // Will allow to select the same file twice in a row
+    $("#form_upload_avatar").trigger("reset");
 }
 
 async function setDefaultPersona() {
@@ -4166,7 +4346,7 @@ async function deleteUserAvatar() {
         return;
     }
 
-    const confirm = await callPopup('Are you sure you want to delete this avatar?', 'confirm');
+    const confirm = await callPopup('<h3>Are you sure you want to delete this avatar?</h3>All information associated with its linked persona will be lost.', 'confirm');
 
     if (!confirm) {
         console.debug('User cancelled deleting avatar');
@@ -4184,6 +4364,7 @@ async function deleteUserAvatar() {
     if (request.ok) {
         console.log(`Deleted avatar ${avatarId}`);
         delete power_user.personas[avatarId];
+        delete power_user.persona_descriptions[avatarId];
 
         if (avatarId === power_user.default_persona) {
             toastr.warning('The default persona was deleted. You will need to set a new default persona.', 'Default persona deleted');
@@ -4220,6 +4401,7 @@ function lockUserNameToChat() {
             { timeOut: 10000, extendedTimeOut: 20000, },
         );
         power_user.personas[user_avatar] = name1;
+        power_user.persona_descriptions[user_avatar] =  { description: '', position: persona_description_positions.BEFORE_CHAR };
     }
 
     chat_metadata['persona'] = user_avatar;
@@ -4417,6 +4599,7 @@ async function getSettings(type) {
         user_avatar = settings.user_avatar;
         reloadUserAvatar();
         highlightSelectedAvatar();
+        setPersonaDescription();
 
         //Load the API server URL from settings
         api_server = settings.api_server;
@@ -4879,37 +5062,11 @@ export function select_selected_character(chid) {
     $("#renameCharButton").css("display", "");
     $('.open_alternate_greetings').data('chid', chid);
     $('#set_character_world').data('chid', chid);
-    const world = characters[chid]?.data?.extensions?.world;
-    const worldSet = Boolean(world && world_names.includes(world));
-    $('#set_character_world').toggleClass('world_set', worldSet);
+    setWorldInfoButtonClass(chid);
     checkEmbeddedWorld(chid);
 
     $("#form_create").attr("actiontype", "editcharacter");
     saveSettingsDebounced();
-}
-
-function checkEmbeddedWorld(chid) {
-    $('#import_character_info').hide();
-
-    if (chid === undefined) {
-        return;
-    }
-
-    if (characters[chid]?.data?.character_book) {
-        $('#import_character_info').data('chid', chid).show();
-
-        // Only show the alert once per character
-        const checkKey = `AlertWI_${characters[chid].avatar}`;
-        const worldName = characters[chid]?.data?.extensions?.world;
-        if (!localStorage.getItem(checkKey) && (!worldName || !world_names.includes(worldName))) {
-            toastr.info(
-                'To import and use it, select "Import Embedded World Info" in the Options dropdown menu on the character panel.',
-                `${characters[chid].name} has an embedded World/Lorebook`,
-                { timeOut: 10000, extendedTimeOut: 20000, positionClass: 'toast-top-center' },
-            );
-            localStorage.setItem(checkKey, 1);
-        }
-    }
 }
 
 function select_rm_create() {
@@ -4960,7 +5117,7 @@ function select_rm_create() {
     $("#name_div").addClass('displayBlock');
     $('.open_alternate_greetings').data('chid', undefined);
     $('#set_character_world').data('chid', undefined);
-    $('#set_character_world').toggleClass('world_set', !!create_save.world);
+    setWorldInfoButtonClass(undefined, !!create_save.world);
     updateFavButtonState(false);
     checkEmbeddedWorld();
 
@@ -5343,7 +5500,7 @@ function openCharacterWorldPopup() {
     }
 
     function onSelectCharacterWorld() {
-        const value = $(this).find('option:selected').val();
+        const value = $('.character_world_info_selector').find('option:selected').val();
         const worldIndex = value !== '' ? Number(value) : NaN;
         const name = !isNaN(worldIndex) ? world_names[worldIndex] : '';
 
@@ -5357,15 +5514,45 @@ function openCharacterWorldPopup() {
             createOrEditCharacter();
         }
 
-        $('#set_character_world').toggleClass('world_set', !!value);
+        setWorldInfoButtonClass(undefined, !!value);
     }
 
-    const name = (menu_type == 'create' ? create_save.name : characters[chid]?.data?.name) || 'Nameless';
-    const worldId = (menu_type == 'create' ? create_save.world : characters[chid]?.data?.extensions?.world) || '';
+    function onExtraWorldInfoChanged() {
+        const selectedWorlds = $('.character_extra_world_info_selector').val();
+        let charLore = world_info.charLore ?? [];
+
+        // TODO: Maybe make this utility function not use the window context?
+        const fileName = getCharaFilename(chid);
+        const tempExtraBooks = selectedWorlds.map((index) => world_names[index]).filter((e) => e !== undefined);
+
+        const existingCharLore = charLore.find((e) => e.name === fileName);
+        if (existingCharLore) {
+            if (tempExtraBooks.length === 0) {
+                charLore.splice(existingCharLore, 1);
+            } else {
+                existingCharLore.extraBooks = tempExtraBooks;
+            }
+        } else {
+            const newCharLoreEntry = {
+                name: fileName,
+                extraBooks: tempExtraBooks
+            }
+
+            charLore.push(newCharLoreEntry);
+        }
+        Object.assign(world_info, { charLore: charLore });
+        saveSettingsDebounced();
+    }
+
     const template = $('#character_world_template .character_world').clone();
     const select = template.find('.character_world_info_selector');
+    const extraSelect = template.find('.character_extra_world_info_selector');
+    const name = (menu_type == 'create' ? create_save.name : characters[chid]?.data?.name) || 'Nameless';
+    const worldId = (menu_type == 'create' ? create_save.world : characters[chid]?.data?.extensions?.world) || '';
     template.find('.character_name').text(name);
 
+
+    // Apped to base dropdown
     world_names.forEach((item, i) => {
         const option = document.createElement('option');
         option.value = i;
@@ -5374,7 +5561,47 @@ function openCharacterWorldPopup() {
         select.append(option);
     });
 
+    // Append to extras dropdown
+    if (world_names.length > 0) {
+        extraSelect.empty();
+    }
+    world_names.forEach((item, i) => {
+        const option = document.createElement('option');
+        option.value = i;
+        option.innerText = item;
+
+        const existingCharLore = world_info.charLore?.find((e) => e.name === getCharaFilename());
+        if (existingCharLore) {
+            option.selected = existingCharLore.extraBooks.includes(item);
+        } else {
+            option.selected = false;
+        }
+        extraSelect.append(option);
+    });
+
     select.on('change', onSelectCharacterWorld);
+    extraSelect.on('mousedown change', async function (e) {
+        // If there's no world names, don't do anything
+        if (world_names.length === 0) {
+            e.preventDefault();
+            return;
+        }
+
+        let selectScrollTop = null;
+
+        if (deviceInfo && deviceInfo.device.type === 'desktop') {
+            e.preventDefault();
+            const option = $(e.target);
+            const selectElement = $(extraSelect)[0];
+            selectScrollTop = selectElement.scrollTop;
+            option.prop('selected', !option.prop('selected'));
+            await delay(1);
+            selectElement.scrollTop = selectScrollTop;
+        }
+
+        onExtraWorldInfoChanged();
+    });
+
     callPopup(template, 'text');
 }
 
@@ -6269,56 +6496,21 @@ $(document).ready(function () {
 
     $(document).on("click", "#user_avatar_block .avatar", setUserAvatar);
     $(document).on("click", "#user_avatar_block .avatar_upload", function () {
-        $("#avatar_upload_file").click();
+        $("#avatar_upload_overwrite").val("");
+        $("#avatar_upload_file").trigger('click');
     });
-    $("#avatar_upload_file").on("change", async function (e) {
-        const file = e.target.files[0];
+    $(document).on("click", "#user_avatar_block .set_persona_image", function () {
+        const avatarId = $(this).closest('.avatar-container').find('.avatar').attr('imgfile');
 
-        if (!file) {
+        if (!avatarId) {
+            console.log('no imgfile');
             return;
         }
 
-        const formData = new FormData($("#form_upload_avatar").get(0));
-
-        const dataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = resolve;
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-
-        $('#dialogue_popup').addClass('large_dialogue_popup wide_dialogue_popup');
-        const confirmation = await callPopup(getCropPopup(dataUrl.target.result), 'avatarToCrop');
-        if (!confirmation) {
-            return;
-        }
-
-        let url = "/uploaduseravatar";
-
-        if (crop_data !== undefined) {
-            url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
-        }
-
-        jQuery.ajax({
-            type: "POST",
-            url: url,
-            data: formData,
-            beforeSend: () => { },
-            cache: false,
-            contentType: false,
-            processData: false,
-            success: function (data) {
-                if (data.path) {
-                    appendUserAvatar(data.path);
-                }
-                crop_data = undefined;
-            },
-            error: (jqXHR, exception) => { },
-        });
-
-        // Will allow to select the same file twice in a row
-        $("#form_upload_avatar").trigger("reset");
+        $("#avatar_upload_overwrite").val(avatarId);
+        $("#avatar_upload_file").trigger('click');
     });
+    $("#avatar_upload_file").on("change", uploadUserAvatar);
 
     $(document).on("click", ".bg_example", async function () {
         //when user clicks on a BG thumbnail...
@@ -6562,7 +6754,7 @@ $(document).ready(function () {
 
     $("#form_create").submit(createOrEditCharacter);
 
-    /*     $("#delete_button").click(function () {
+    $("#delete_button").on('click', function () {
             popup_type = "del_ch";
             callPopup(`
                 <h3>Delete the character?</h3>
@@ -6570,9 +6762,9 @@ $(document).ready(function () {
                 THIS WILL ALSO DELETE ALL<br>
                 OF THE CHARACTER'S CHAT FILES.<br><br></b>`
             );
-        }); */
+    });
 
-    $("#rm_info_button").click(function () {
+    $("#rm_info_button").on('click', function () {
         $("#rm_info_avatar").html("");
         select_rm_characters();
     });
@@ -7285,6 +7477,8 @@ $(document).ready(function () {
         setUserName($('#your_name').val());
     });
 
+    $("#create_dummy_persona").on('click', createDummyPersona);
+
     $('#sync_name_button').on('click', async function () {
         const confirmation = await callPopup(`<h3>Are you sure?</h3>All user-sent messages in this chat will be attributed to ${name1}.`, 'confirm');
 
@@ -7328,8 +7522,9 @@ $(document).ready(function () {
     $(document).on('click', '.bind_user_name', bindUserNameToPersona);
     $(document).on('click', '.delete_avatar', deleteUserAvatar);
     $(document).on('click', '.set_default_persona', setDefaultPersona);
-    $(document).on('click', '.set_user_info', setUserInfo);
     $('#lock_user_name').on('click', lockUserNameToChat);
+    $('#persona_description').on('input', onPersonaDescriptionInput);
+    $('#persona_description_position').on('input', onPersonaDescriptionPositionInput);
 
     //**************************CHARACTER IMPORT EXPORT*************************//
     $("#character_import_button").click(function () {
@@ -7345,10 +7540,10 @@ $(document).ready(function () {
             importCharacter(file);
         }
     });
-    /*     $("#export_button").click(function (e) {
+    $("#export_button").on('click', function (e) {
             $('#export_format_popup').toggle();
             exportPopper.update();
-        }); */
+    });
     $(document).on('click', '.export_format', async function () {
         const format = $(this).data('format');
 
@@ -7430,7 +7625,7 @@ $(document).ready(function () {
         select_rm_characters();
     });
 
-    /*     $("#dupe_button").click(async function () {
+    $("#dupe_button").click(async function () {
 
             const body = { avatar_url: characters[this_chid].avatar };
             const response = await fetch('/dupecharacter', {
@@ -7442,7 +7637,7 @@ $(document).ready(function () {
                 toastr.success("Character Duplicated");
                 getCharacters();
             }
-        }); */
+    });
 
     $(document).on("click", ".select_chat_block, .bookmark_link, .mes_bookmark", async function () {
         let file_name = $(this).hasClass('mes_bookmark')
@@ -7640,18 +7835,19 @@ $(document).ready(function () {
             case 'renameCharButton':
                 renameCharacter();
                 break;
-            case 'dupe_button':
+            /*case 'dupe_button':
                 DupeChar();
                 break;
             case 'export_button':
                 $('#export_format_popup').toggle();
                 exportPopper.update();
                 break;
+            */
             case 'import_character_info':
                 await importEmbeddedWorldInfo();
                 saveCharacterDebounced();
                 break;
-            case 'delete_button':
+            /*case 'delete_button':
                 popup_type = "del_ch";
                 callPopup(`
                         <h3>Delete the character?</h3>
@@ -7659,7 +7855,7 @@ $(document).ready(function () {
                         THIS WILL ALSO DELETE ALL<br>
                         OF THE CHARACTER'S CHAT FILES.<br><br></b>`
                 );
-                break;
+                break;*/
         }
         $("#char-management-dropdown").prop('selectedIndex', 0);
     });

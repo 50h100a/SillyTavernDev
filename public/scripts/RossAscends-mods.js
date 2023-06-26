@@ -11,8 +11,7 @@ import {
     is_send_press,
     getTokenCount,
     menu_type,
-
-
+    max_context,
 } from "../script.js";
 
 
@@ -287,18 +286,18 @@ export function RA_CountCharTokens() {
         } else { console.debug("RA_TC -- no valid char found, closing."); }
     }
     // display the counted tokens
-    if (count_tokens < 1024 && perm_tokens < 1024) {
-        //display normal if both counts are under 1024
+    const tokenLimit = Math.max(((main_api !== 'openai' ? max_context : oai_settings.openai_max_context) / 2), 1024);
+    if (count_tokens < tokenLimit && perm_tokens < tokenLimit) {
         $("#result_info").html(`<small>${count_tokens} Tokens (${perm_tokens} Permanent)</small>`);
     } else {
         $("#result_info").html(`
-        <div class="flex-container flexFlowColumn alignitemscenter">
+        <div class="flex-container alignitemscenter">
             <div class="flex-container flexnowrap flexNoGap">
                 <small class="flex-container flexnowrap flexNoGap">
                     <div class="neutral_warning">${count_tokens}</div>&nbsp;Tokens (<div class="neutral_warning">${perm_tokens}</div><div>&nbsp;Permanent)</div>
                 </small>
             </div>
-            <div id="chartokenwarning" class="menu_button whitespacenowrap"><a href="https://docs.sillytavern.app/usage/core-concepts/characterdesign/#character-tokens" target="_blank">About Token 'Limits'</a></div>
+            <div id="chartokenwarning" class="menu_button margin0 whitespacenowrap"><a href="https://docs.sillytavern.app/usage/core-concepts/characterdesign/#character-tokens" target="_blank">About Token 'Limits'</a></div>
         </div>`);
     } //warn if either are over 1024
 }

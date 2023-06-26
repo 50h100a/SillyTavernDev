@@ -10,7 +10,7 @@ import { selected_group } from "../../group-chats.js";
 import { ModuleWorkerWrapper, extension_settings, getContext, saveMetadataDebounced } from "../../extensions.js";
 import { registerSlashCommand } from "../../slash-commands.js";
 import { getCharaFilename, debounce } from "../../utils.js";
-export { MODULE_NAME };
+export { MODULE_NAME as NOTE_MODULE_NAME };
 
 const MODULE_NAME = '2_floating_prompt'; // <= Deliberate, for sorting lower than memory
 const UPDATE_INTERVAL = 1000;
@@ -25,6 +25,12 @@ export const metadata_keys = {
     interval: 'note_interval',
     depth: 'note_depth',
     position: 'note_position',
+}
+
+const chara_note_position = {
+    replace: 0,
+    before: 1,
+    after: 2,
 }
 
 function setNoteTextCommand(_, text) {
@@ -87,11 +93,13 @@ async function onExtensionFloatingPromptInput() {
     chat_metadata[metadata_keys.prompt] = $(this).val();
     setMainPromptTokenCounterDebounced(chat_metadata[metadata_keys.prompt]);
     updateSettings();
+    saveMetadataDebounced();
 }
 
 async function onExtensionFloatingIntervalInput() {
     chat_metadata[metadata_keys.interval] = Number($(this).val());
     updateSettings();
+    saveMetadataDebounced();
 }
 
 async function onExtensionFloatingDepthInput() {
@@ -104,11 +112,23 @@ async function onExtensionFloatingDepthInput() {
 
     chat_metadata[metadata_keys.depth] = value;
     updateSettings();
+    saveMetadataDebounced();
 }
 
 async function onExtensionFloatingPositionInput(e) {
     chat_metadata[metadata_keys.position] = e.target.value;
     updateSettings();
+    saveMetadataDebounced();
+}
+
+async function onExtensionFloatingCharPositionInput(e) {
+    const value = e.target.value;
+    const charaNote = extension_settings.note.chara.find((e) => e.name === getCharaFilename());
+
+    if (charaNote) {
+        charaNote.position = Number(value);
+        updateSettings();
+    }
 }
 
 function onExtensionFloatingCharaPromptInput() {
@@ -143,7 +163,7 @@ function onExtensionFloatingCharaPromptInput() {
         if (!extension_settings.note.chara) {
             extension_settings.note.chara = []
         }
-        Object.assign(tempCharaNote, { useChara: false })
+        Object.assign(tempCharaNote, { useChara: false, position: chara_note_position.replace })
 
         extension_settings.note.chara.push(tempCharaNote);
     } else {
@@ -189,9 +209,11 @@ function loadSettings() {
 
         $('#extension_floating_chara').val(charaNote ? charaNote.prompt : '');
         $('#extension_use_floating_chara').prop('checked', charaNote ? charaNote.useChara : false);
+        $(`input[name="extension_floating_char_position"][value="${charaNote?.position ?? chara_note_position.replace}"]`).prop('checked', true);
     } else {
         $('#extension_floating_chara').val('');
         $('#extension_use_floating_chara').prop('checked', false);
+        $(`input[name="extension_floating_char_position"][value="${chara_note_position.replace}"]`).prop('checked', true);
     }
 
     $('#extension_floating_default').val(extension_settings.note.default);
@@ -200,6 +222,8 @@ function loadSettings() {
 export function setFloatingPrompt() {
     const context = getContext();
     if (!context.groupId && context.characterId === undefined) {
+        console.debug('setFloatingPrompt: Not in a chat. Skipping.');
+        shouldWIAddPrompt = false;
         return;
     }
 
@@ -221,6 +245,7 @@ export function setFloatingPrompt() {
     if (lastMessageNumber <= 0 || chat_metadata[metadata_keys.interval] <= 0) {
         context.setExtensionPrompt(MODULE_NAME, '');
         $('#extension_floating_counter').text('(disabled)');
+        shouldWIAddPrompt = false;
         return;
     }
 
@@ -236,7 +261,17 @@ export function setFloatingPrompt() {
 
         // Only replace with the chara note if the user checked the box
         if (charaNote && charaNote.useChara) {
-            prompt = charaNote.prompt;
+            switch (charaNote.position) {
+                case chara_note_position.before:
+                    prompt = charaNote.prompt + '\n' + prompt;
+                    break;
+                case chara_note_position.after:
+                    prompt = prompt + '\n' + charaNote.prompt;
+                    break;
+                default:
+                    prompt = charaNote.prompt;
+                    break;
+            }
         }
     }
     context.setExtensionPrompt(MODULE_NAME, prompt, chat_metadata[metadata_keys.position], chat_metadata[metadata_keys.depth]);
@@ -367,8 +402,22 @@ setTimeout(function () {
 
                         <label class="checkbox_label" for="extension_use_floating_chara">
                             <input id="extension_use_floating_chara" type="checkbox" />
-                        <span data-i18n="Use character author's note">Use character author's note</span>
-                    </label>
+                            <span data-i18n="Use character author's note">Use character author's note</span>
+                        </label>
+                        <div class="floating_prompt_radio_group">
+                            <label>
+                                <input type="radio" name="extension_floating_char_position" value="0" />
+                                Replace Author's Note
+                            </label>
+                            <label>
+                                <input type="radio" name="extension_floating_char_position" value="1" />
+                                Top of Author's Note
+                            </label>
+                            <label>
+                                <input type="radio" name="extension_floating_char_position" value="2" />
+                                Bottom of Author's Note
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <hr class="sysHR">
@@ -404,6 +453,7 @@ setTimeout(function () {
         $('#extension_use_floating_chara').on('input', onExtensionFloatingCharaCheckboxChanged);
         $('#extension_floating_default').on('input', onExtensionFloatingDefaultInput);
         $('input[name="extension_floating_position"]').on('change', onExtensionFloatingPositionInput);
+        $('input[name="extension_floating_char_position"]').on('change', onExtensionFloatingCharPositionInput);
         $('#ANClose').on('click', function () {
             $("#floatingPrompt").transition({
                 opacity: 0,

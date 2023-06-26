@@ -216,6 +216,7 @@ table.responsiveTable {
     font-weight: 500;
 }
 
+.mes_text strong em,
 .mes_text strong,
 .mes_text h2,
 .mes_text h1 {
@@ -687,14 +688,14 @@ hr {
     gap: 5px;
 }
 
-#avatar_div_div {
+.add_avatar {
     border: 2px solid var(--SmartThemeBodyColor);
     margin: 2px;
     cursor: pointer;
     transition: filter 0.2s ease-in-out;
 }
 
-#avatar_div_div:hover {
+.add_avatar:hover {
     filter: drop-shadow(0px 0px 5px var(--SmartThemeQuoteColor));
 }
 
@@ -702,6 +703,7 @@ hr {
     width: 50px;
     height: 50px;
     border-style: none;
+    flex: 1;
 }
 
 .last_mes .mesAvatarWrapper {
@@ -769,6 +771,27 @@ hr {
     box-shadow: 0 0 5px var(--black50a);
 }
 
+.character_select .avatar,
+body.big-avatars .character_select .avatar {
+    flex: unset;
+}
+
+/*
+.character_select .avatar img {
+    flex: unset;
+    width: 50px;
+    height: 50px;
+    width: unset;
+    aspect-ratio: 1 / 1;
+}
+
+,
+body.big-avatars .character_select .avatar img {
+    min-width: 60px;
+    aspect-ratio: unset;
+}
+
+ */
 body.no-hotswap .hotswap {
     display: none !important;
 }
@@ -784,13 +807,16 @@ body.no-timestamps .timestamp {
 body.big-avatars .avatar {
     width: 60px;
     height: 90px;
+    /* width: unset; */
     border-style: none;
     display: flex;
     justify-content: center;
     flex-direction: column;
     align-items: center;
+    /* align-self: unset; */
     overflow: visible;
     border-radius: 10px;
+    flex: 1
 }
 
 body.big-avatars #user_avatar_block .avatar,
@@ -806,8 +832,8 @@ body.big-avatars #user_avatar_block .avatar img {
 }
 
 body.big-avatars .avatar img {
-    width: 100%;
-    height: 100%;
+    width: 60px;
+    height: 90px;
     object-fit: cover;
     object-position: center;
     border: 1px solid var(--black30a);
@@ -888,7 +914,7 @@ select {
 }
 
 #rm_ch_create_block textarea {
-    min-height: 175px;
+    min-height: 190px;
 }
 
 .margin-bot-10px,
@@ -927,7 +953,6 @@ select {
 }
 
 #character_cross,
-#world_cross,
 #select_chat_cross {
     position: absolute;
     right: 15px;
@@ -1012,6 +1037,7 @@ input[type="file"] {
     align-items: center;
     flex-wrap: wrap;
     gap: 10px;
+    padding: 0 5px;
 }
 
 #right-nav-panel-tabs .right_menu_button,
@@ -1122,6 +1148,7 @@ input[type="file"] {
     text-align: left;
     white-space: nowrap;
     margin: 0;
+    font-size: calc(var(--mainFontSize) * 1.25);
 }
 
 .selected-right-tab {
@@ -1326,6 +1353,10 @@ input[type=search]:focus::-webkit-search-cancel-button {
     font-weight: bolder;
 }
 
+.ch_avatar_url {
+    float: right;
+}
+
 .character_select .avatar {
     align-self: center;
 }
@@ -1370,6 +1401,10 @@ body.big-avatars .ch_description {
 
 .alignitemsflexstart {
     align-items: flex-start !important;
+}
+
+.alignSelfStart {
+    align-self: start;
 }
 
 .gap5px {
@@ -1491,7 +1526,7 @@ body.big-avatars .ch_description {
     height: 100%;
     overflow-y: auto;
     grid-template-rows:
-        [avatar] min-content [hr] min-content [search block] min-content [descriptionHeader] min-content [description] auto [firstmessageHeader] min-content [firstMessage] auto [hidden] min-content;
+        [avatar] min-content [hr] min-content [descriptionHeader] min-content [description] auto [firstmessageHeader] min-content [firstMessage] auto [hidden] min-content;
 }
 
 .avatar_div {
@@ -1499,10 +1534,21 @@ body.big-avatars .ch_description {
     width: 100%;
     flex-wrap: wrap;
     margin-top: 0px;
-    /* margin-bottom: 6px; */
     align-items: center;
 }
 
+/* #avatar_div_div.avatar img {
+    height: 90%;
+    width: unset;
+    aspect-ratio: 1/1;
+}
+
+body.big-avatars #avatar_div_div.avatar img {
+    height: 90%;
+    width: unset;
+    aspect-ratio: 2 / 3;
+}
+ */
 #user-settings-block h4,
 #user-settings-block h3 {
     margin: 5px 0;
@@ -1584,7 +1630,7 @@ body.big-avatars .ch_description {
 .avatar-container {
     position: relative;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
 }
 
@@ -1702,6 +1748,7 @@ grammarly-extension {
 #result_info {
     font-size: calc(var(--mainFontSize) - 0.1rem);
     font-weight: bold;
+    margin-bottom: 5px;
 }
 
 /* Focus */
@@ -1822,7 +1869,7 @@ grammarly-extension {
     font-weight: bold;
     padding: 5px;
     margin: 0;
-    height: 35px;
+    height: 32px;
     filter: grayscale(0.5);
     text-align: center;
     font-size: 20px;
@@ -2100,22 +2147,6 @@ grammarly-extension {
     display: inline;
 }
 
-#world_cross {
-    position: absolute;
-    right: 15px;
-    top: 15px;
-    width: 20px;
-    height: 20px;
-    cursor: pointer;
-    opacity: 0.6;
-}
-
-#world_logo {
-    width: 35px;
-    height: 35px;
-    margin-right: 0.5rem;
-}
-
 #world_popup h5 {
     color: var(--grey70);
 }
@@ -2182,13 +2213,6 @@ input[type='checkbox']:not(#nav-toggle):not(#rm_button_panel_pin):not(#lm_button
 input[type='checkbox']:not(#nav-toggle):not(#rm_button_panel_pin):not(#lm_button_panel_pin):checked::after {
     -webkit-transform: scale(1);
     transform: scale(1);
-}
-
-.option_select_right_menu {
-    width: 284px;
-    margin-bottom: 35px;
-    color: var(--white70a);
-    background-color: var(--black30a);
 }
 
 #user_avatar_block {
@@ -2356,6 +2380,12 @@ input[type="range"]::-webkit-slider-thumb {
 
 #chartokenwarning a {
     color: var(--SmartThemeBodyColor);
+}
+
+#char-management-dropdown,
+#tagInput {
+    height: 32px;
+    margin-bottom: 0;
 }
 
 .nice-link:hover {
@@ -2747,12 +2777,6 @@ h5 {
 .PastChat_cross:hover {
     color: red;
     filter: drop-shadow(0 0 2px red);
-}
-
-#advanced_book_logo {
-    width: 35px;
-    height: 35px;
-    display: inline-block;
 }
 
 #export_character_div {
@@ -3199,6 +3223,10 @@ body .ui-widget-content li:hover {
 
 .group_select:hover {
     background-color: var(--white30a);
+}
+
+.group_select .avatar {
+    flex: 0;
 }
 
 .group_select .group_icon {
@@ -3740,6 +3768,13 @@ label[for="extensions_autoconnect"] {
     flex-grow: 1;
 }
 
+.menu_button_icon {
+    display: flex;
+    align-items: center;
+    width: fit-content;
+    gap: 5px;
+}
+
 /*------------ TOP SIDE SETTINGS ----------------*/
 
 #top-settings-holder {
@@ -3749,10 +3784,10 @@ label[for="extensions_autoconnect"] {
     max-width: var(--sheldWidth);
     justify-content: center;
     display: grid;
-    grid-template-columns: 10% 10% 10% 10% 10% 10% 10% 10%;
+    grid-template-columns: 10% 10% 10% 10% 10% 10% 10% 10% 10%;
     z-index: 3000;
     position: relative;
-    grid-gap: 2%;
+    grid-gap: 1%;
 
 }
 
@@ -3828,6 +3863,10 @@ label[for="extensions_autoconnect"] {
 
 .drawer25pWidth {
     flex-basis: calc((var(--sheldWidth) / 4) - 16px);
+}
+
+.drawer33pWidth {
+    flex-basis: calc((var(--sheldWidth) / 3) - 16px);
 }
 
 .drawer-content {
@@ -3968,7 +4007,6 @@ toolcool-color-picker {
     width: 30% !important;
 }
 
-
 .justifyLeft {
     text-align: start;
     justify-content: left;
@@ -3978,6 +4016,14 @@ toolcool-color-picker {
 .justifyCenter {
     justify-content: center;
     margin: 0 auto;
+}
+
+.justifyContentSpaceAround {
+    justify-content: space-around;
+}
+
+.justifyContentFlexEnd {
+    justify-content: flex-end;
 }
 
 .spaceEvenly {
@@ -4411,8 +4457,13 @@ body.waifuMode #avatar_zoom_popup {
         aspect-ratio: 2 / 3;
     }
 
-    .world_entry_thin_controls {
+    .world_entry_thin_controls,
+    #persona-management-block {
         flex-direction: column;
+    }
+
+    #WIMultiSelector {
+        align-self: normal;
     }
 
     .WIEntryContentAndMemo {
@@ -4583,7 +4634,7 @@ body.waifuMode #avatar_zoom_popup {
     }
 
     #rm_ch_create_block textarea {
-        max-height: 180px;
+        max-height: 190px;
     }
 
     #talkativeness_hint span {
@@ -4592,6 +4643,10 @@ body.waifuMode #avatar_zoom_popup {
 
     .drawer25pWidth {
         flex-basis: max(calc(100% / 4 - 10px), 190px);
+    }
+
+    .drawer33pWidth {
+        flex-basis: max(calc(100% / 3 - 10px), 190px);
     }
 
     .expression-holder {
@@ -4659,6 +4714,10 @@ body.waifuMode #avatar_zoom_popup {
 
 @media screen and (max-width: 450px) {
     .drawer25pWidth {
+        flex-basis: max(calc(100% / 2 - 10px), 180px);
+    }
+
+    .drawer33pWidth {
         flex-basis: max(calc(100% / 2 - 10px), 180px);
     }
 }
