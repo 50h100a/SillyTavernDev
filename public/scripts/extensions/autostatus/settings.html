@@ -1,0 +1,65 @@
+<div id="attribute_template" class="template_element">
+	<div>
+		<h4 id="name">Attribute</h4>
+		<div class="flex-container flexGap5">
+				<div id="value"></div>
+		</div>
+	</div>
+</div>
+<div id="attribute_value_template" class="template_element">
+	<div class="flex-container flexGap5 attribute_value" style="width:100%;">
+		<div id="name" style="font-family:monospace;"></div>
+		<div style="flex-grow: 1;">
+			<textarea id="value" hidden class="text_pole textarea_compact" rows="2"></textarea>
+		</div>
+	</div>
+</div>
+<div class="autostatus_settings">
+	<div class="inline-drawer">
+			<div class="inline-drawer-toggle inline-drawer-header">
+			<b>Auto Status</b>
+			<div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+	</div>
+	<div class="inline-drawer-content">
+			<small>Automatic tracking and evaluation for custom attributes.</small>
+			<hr>
+			<span class="wide100p marginTopBot5 displayBlock">Attribute Config</span>
+      <textarea id="autostatus_attribute_list" hidden class="text_pole textarea_compact" rows="16" placeholder="[]" style="font-family:monospace;"></textarea>
+			<span id="config_warnings" class="failure"></span>
+			<div id="attribute_config_list">
+				<small><i>No attributes defined</i></small>
+			</div>
+			<hr>
+			<span class="wide100p marginTopBot5 displayBlock">Attribute Values</span>
+			<div id="attribute_value_list">
+				<small><i>No attributes defined</i></small>
+			</div>
+			<hr>
+			<div class="title_restorable">
+				<div id="autostatus_update_now" title="Force all attribute queries to run now." class="menu_button menu_button_icon">
+						<i class="fa-solid fa-database"></i>
+						<span>Update Now</span>
+				</div>
+				<label class="checkbox_label" for="autostatus_allow_updates" title="Automatically update status values">
+					<input type="checkbox" id="autostatus_allow_updates" />
+					<span>Update</span>
+				</label>
+				<label class="checkbox_label" for="autostatus_allow_injection" title="Inject attributes into the prompt" style="margin-right:20px;">
+					<input type="checkbox" id="autostatus_allow_injection" />
+					<span>Inject</span>
+				</label>
+			</div>
+			<hr>
+			<div class="flex-container spaceEvenly">
+					<div id="autostatus_import" title="Import current attribute config" class="menu_button">
+							<i class="fa-solid fa-file-import"></i>
+							<span>Import</span>
+					</div>
+					<div id="autostatus_export" title="Export current attribute config" class="menu_button">
+							<i class="fa-solid fa-file-export"></i>
+							<span>Export</span>
+					</div>
+			</div>
+	</div>
+	<form><input id="autostatus_import_file" type="file" accept="application/json" hidden></form>
+</div>

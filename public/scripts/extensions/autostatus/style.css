@@ -1,0 +1,7 @@
+.autostatus_settings .menu_button {
+    width: fit-content;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-direction: row;
+}

@@ -1,0 +1,43 @@
+<div id="autostatus_ui" class="drawer-content flexGap5">
+	<div class="panelControlBar flex-container">
+			<div id="autostatus_ui_header" class="fa-solid fa-grip drag-grabber"></div>
+			<div id="ANClose" class="fa-solid fa-circle-xmark"></div>
+	</div>
+	<div name="autostatus_ui_holder">
+			<div class="inline-drawer">
+					<div id="ANBlockToggle" class="inline-drawer-toggle inline-drawer-header">
+							<b>Auto Status</b>
+							<div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+
+			</div>
+			<div class="inline-drawer-content">
+					<small>
+							Automatic tracking and evaluation for custom attributes.<br>
+					</small>
+
+					<textarea id="extension_floating_prompt" class="text_pole" rows="8" maxlength="10000"></textarea>
+					<div class="extension_token_counter">Tokens: <span id="extension_floating_prompt_token_counter">0</small></div>
+
+					<div class="floating_prompt_radio_group">
+							<label>
+									<input type="radio" name="extension_floating_position" value="0" />
+									After scenario
+							</label>
+							<label>
+									<input type="radio" name="extension_floating_position" value="1" />
+									In-chat @ Depth <input id="extension_floating_depth" class="text_pole widthUnset" type="number" min="0" max="99" />
+							</label>
+					</div>
+					<!--<label for="extension_floating_interval">In-Chat Insertion Depth</label>-->
+
+					<label for="extension_floating_interval">Insertion Frequency</label>
+
+					<input id="extension_floating_interval" class="text_pole widthUnset" type="number" min="0" max="999"  /><small> (0 = Disable, 1 = Always)</small>
+					<br>
+
+					<span>User inputs until next insertion: <span id="extension_floating_counter">(disabled)</span></span>
+
+					</div>
+			</div>
+	</div>
+</div>
