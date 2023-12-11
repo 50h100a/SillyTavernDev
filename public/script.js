@@ -232,7 +232,6 @@ export {
     isStreamingEnabled,
     getThumbnailUrl,
     getStoppingStrings,
-    getStatus,
     reloadMarkdownProcessor,
     getCurrentChatId,
     chat,
@@ -526,14 +525,17 @@ function getUrlSync(url, cache = true) {
     }).responseText;
 }
 
-const templateCache = {};
+const templateCache = new Map();
 
 export function renderTemplate(templateId, templateData = {}, sanitize = true, localize = true, fullPath = false) {
     try {
         const pathToTemplate = fullPath ? templateId : `/scripts/templates/${templateId}.html`;
-        const templateContent = (pathToTemplate in templateCache) ? templateCache[pathToTemplate] : getUrlSync(pathToTemplate);
-        templateCache[pathToTemplate] = templateContent;
-        const template = Handlebars.compile(templateContent);
+        let template = templateCache.get(pathToTemplate);
+        if (!template) {
+            const templateContent = getUrlSync(pathToTemplate);
+            template = Handlebars.compile(templateContent);
+            templateCache.set(pathToTemplate, template);
+        }
         let result = template(templateData);
 
         if (sanitize) {
@@ -649,7 +651,8 @@ let create_save = {
 };
 
 //animation right menu
-export let animation_duration = 125;
+export const ANIMATION_DURATION_DEFAULT = 125;
+export let animation_duration = ANIMATION_DURATION_DEFAULT;
 let animation_easing = 'ease-in-out';
 let popup_type = '';
 let chat_file_for_del = '';
@@ -763,6 +766,14 @@ function displayOnlineStatus() {
     }
 }
 
+/**
+ * Sets the duration of JS animations.
+ * @param {number} ms Duration in milliseconds. Resets to default if null.
+ */
+export function setAnimationDuration(ms = null) {
+    animation_duration = ms ?? ANIMATION_DURATION_DEFAULT;
+}
+
 export function setActiveCharacter(character) {
     active_character = character;
 }
@@ -857,7 +868,7 @@ export async function clearItemizedPrompts() {
     }
 }
 
-async function getStatus() {
+async function getStatusKobold() {
     if (main_api == 'koboldhorde') {
         try {
             const hordeStatus = await checkHordeStatus();
@@ -870,9 +881,9 @@ async function getStatus() {
         return resultCheckStatus();
     }
 
-    const url = main_api == 'textgenerationwebui' ? '/api/textgenerationwebui/status' : '/getstatus';
+    const url = '/getstatus';
 
-    let endpoint = getAPIServerUrl();
+    let endpoint = api_server;
 
     if (!endpoint) {
         console.warn('No endpoint for status check');
@@ -886,18 +897,66 @@ async function getStatus() {
             body: JSON.stringify({
                 main_api,
                 api_server: endpoint,
-                api_type: textgen_settings.type,
-                legacy_api: main_api == 'textgenerationwebui' ?
-                    textgen_settings.legacy_api &&
-                    textgen_settings.type !== MANCER :
-                    false,
             }),
             signal: abortStatusCheck.signal,
         });
 
         const data = await response.json();
 
-        if (main_api == 'textgenerationwebui' && textgen_settings.type === MANCER) {
+
+        online_status = data?.result;
+
+        if (!online_status) {
+            online_status = 'no_connection';
+        }
+
+        // Determine instruct mode preset
+        autoSelectInstructPreset(online_status);
+
+        // determine if we can use stop sequence and streaming
+        setKoboldFlags(data.version, data.koboldVersion);
+
+        // We didn't get a 200 status code, but the endpoint has an explanation. Which means it DID connect, but I digress.
+        if (online_status === 'no_connection' && data.response) {
+            toastr.error(data.response, 'API Error', { timeOut: 5000, preventDuplicates: true });
+        }
+    } catch (err) {
+        console.error('Error getting status', err);
+        online_status = 'no_connection';
+    }
+
+    return resultCheckStatus();
+}
+
+async function getStatusTextgen() {
+    const url = '/api/textgenerationwebui/status';
+
+    let endpoint = textgen_settings.type === MANCER ?
+        MANCER_SERVER :
+        api_server_textgenerationwebui;
+
+    if (!endpoint) {
+        console.warn('No endpoint for status check');
+        return;
+    }
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                api_server: endpoint,
+                api_type: textgen_settings.type,
+                legacy_api:
+                    textgen_settings.legacy_api &&
+                    textgen_settings.type !== MANCER,
+            }),
+            signal: abortStatusCheck.signal,
+        });
+
+        const data = await response.json();
+
+        if (textgen_settings.type === MANCER) {
             online_status = textgen_settings.mancer_model;
             loadMancerModels(data?.data);
         } else {
@@ -911,11 +970,6 @@ async function getStatus() {
         // Determine instruct mode preset
         autoSelectInstructPreset(online_status);
 
-        // determine if we can use stop sequence and streaming
-        if (main_api === 'kobold' || main_api === 'koboldhorde') {
-            setKoboldFlags(data.version, data.koboldVersion);
-        }
-
         // We didn't get a 200 status code, but the endpoint has an explanation. Which means it DID connect, but I digress.
         if (online_status === 'no_connection' && data.response) {
             toastr.error(data.response, 'API Error', { timeOut: 5000, preventDuplicates: true });
@@ -926,6 +980,22 @@ async function getStatus() {
     }
 
     return resultCheckStatus();
+}
+
+async function getStatusNovel() {
+    try {
+        const result = await loadNovelSubscriptionData();
+
+        if (!result) {
+            throw new Error('Could not load subscription data');
+        }
+
+        online_status = getNovelTier();
+    } catch {
+        online_status = 'no_connection';
+    }
+
+    resultCheckStatus();
 }
 
 export function startStatusLoading() {
@@ -941,22 +1011,6 @@ export function stopStatusLoading() {
 export function resultCheckStatus() {
     displayOnlineStatus();
     stopStatusLoading();
-}
-
-export function getAPIServerUrl() {
-    if (main_api == 'textgenerationwebui') {
-        if (textgen_settings.type === MANCER) {
-            return MANCER_SERVER;
-        }
-
-        return api_server_textgenerationwebui;
-    }
-
-    if (main_api == 'kobold') {
-        return api_server;
-    }
-
-    return '';
 }
 
 export async function selectCharacterById(id) {
@@ -1494,7 +1548,7 @@ function messageFormatting(mes, ch_name, isSystem, isUser) {
         mes = mes.replace(new RegExp(`(^|\n)${ch_name}:`, 'g'), '$1');
     }
 
-    mes = DOMPurify.sanitize(mes);
+    mes = DOMPurify.sanitize(mes, { FORBID_TAGS: ['style'] });
 
     return mes;
 }
@@ -3722,10 +3776,12 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             }
 
             console.debug(`pushed prompt bits to itemizedPrompts array. Length is now: ${itemizedPrompts.length}`);
+            /** @type {Promise<any>} */
+            let streamingGeneratorPromise = Promise.resolve();
 
             if (main_api == 'openai') {
                 if (isStreamingEnabled() && type !== 'quiet') {
-                    streamingProcessor.generator = await sendOpenAIRequest(type, generate_data.prompt, streamingProcessor.abortController.signal);
+                    streamingGeneratorPromise = sendOpenAIRequest(type, generate_data.prompt, streamingProcessor.abortController.signal);
                 }
                 else {
                     sendOpenAIRequest(type, generate_data.prompt, abortController.signal).then(onSuccess).catch(onError);
@@ -3735,13 +3791,13 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
                 generateHorde(finalPrompt, generate_data, abortController.signal, true).then(onSuccess).catch(onError);
             }
             else if (main_api == 'textgenerationwebui' && isStreamingEnabled() && type !== 'quiet') {
-                streamingProcessor.generator = await generateTextGenWithStreaming(generate_data, streamingProcessor.abortController.signal);
+                streamingGeneratorPromise = generateTextGenWithStreaming(generate_data, streamingProcessor.abortController.signal);
             }
             else if (main_api == 'novel' && isStreamingEnabled() && type !== 'quiet') {
-                streamingProcessor.generator = await generateNovelWithStreaming(generate_data, streamingProcessor.abortController.signal);
+                streamingGeneratorPromise = generateNovelWithStreaming(generate_data, streamingProcessor.abortController.signal);
             }
             else if (main_api == 'kobold' && isStreamingEnabled() && type !== 'quiet') {
-                streamingProcessor.generator = await generateKoboldWithStreaming(generate_data, streamingProcessor.abortController.signal);
+                streamingGeneratorPromise = generateKoboldWithStreaming(generate_data, streamingProcessor.abortController.signal);
             }
             else {
                 try {
@@ -3766,19 +3822,27 @@ async function Generate(type, { automatic_trigger, force_name2, resolve, reject,
             }
 
             if (isStreamingEnabled() && type !== 'quiet') {
-                hideSwipeButtons();
-                let getMessage = await streamingProcessor.generate();
-                let messageChunk = cleanUpMessage(getMessage, isImpersonate, isContinue, false);
+                try {
+                    const streamingGenerator = await streamingGeneratorPromise;
+                    streamingProcessor.generator = streamingGenerator;
+                    hideSwipeButtons();
+                    let getMessage = await streamingProcessor.generate();
+                    let messageChunk = cleanUpMessage(getMessage, isImpersonate, isContinue, false);
 
-                if (isContinue) {
-                    getMessage = continue_mag + getMessage;
+                    if (isContinue) {
+                        getMessage = continue_mag + getMessage;
+                    }
+
+                    if (streamingProcessor && !streamingProcessor.isStopped && streamingProcessor.isFinished) {
+                        await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
+                        streamingProcessor = null;
+                        triggerAutoContinue(messageChunk, isImpersonate);
+                    }
+                    resolve();
+                } catch (err) {
+                    onError(err);
                 }
 
-                if (streamingProcessor && !streamingProcessor.isStopped && streamingProcessor.isFinished) {
-                    await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
-                    streamingProcessor = null;
-                    triggerAutoContinue(messageChunk, isImpersonate);
-                }
             }
 
             async function onSuccess(data) {
@@ -5314,7 +5378,7 @@ function changeMainAPI() {
     }
 
     if (main_api == 'koboldhorde') {
-        getStatus();
+        getStatusKobold();
         getHordeModels();
     }
 
@@ -5921,20 +5985,23 @@ export async function getChatsFromFiles(data, isGroupChat) {
  * The function sends a POST request to the server to retrieve all chats for the character. It then
  * processes the received data, sorts it by the file name, and returns the sorted data.
  *
+ * @param {null|number} [characterId=null] - When set, the function will use this character id instead of this_chid.
+ *
  * @returns {Promise<Array>} - An array containing metadata of all past chats of the character, sorted
  * in descending order by file name. Returns `undefined` if the fetch request is unsuccessful.
  */
-async function getPastCharacterChats() {
-    if (!characters[this_chid]) return;
+export async function getPastCharacterChats(characterId = null) {
+    characterId = characterId ?? this_chid;
+    if (!characters[characterId]) return [];
 
     const response = await fetch('/api/characters/chats', {
         method: 'POST',
-        body: JSON.stringify({ avatar_url: characters[this_chid].avatar }),
+        body: JSON.stringify({ avatar_url: characters[characterId].avatar }),
         headers: getRequestHeaders(),
     });
 
     if (!response.ok) {
-        return;
+        return [];
     }
 
     let data = await response.json();
@@ -6026,22 +6093,6 @@ export async function displayPastChats() {
         const searchQuery = $(this).val();
         debouncedDisplay(searchQuery);
     });
-}
-
-async function getStatusNovel() {
-    try {
-        const result = await loadNovelSubscriptionData();
-
-        if (!result) {
-            throw new Error('Could not load subscription data');
-        }
-
-        online_status = getNovelTier();
-    } catch {
-        online_status = 'no_connection';
-    }
-
-    resultCheckStatus();
 }
 
 function selectRightMenuWithAnimation(selectedMenuId) {
@@ -6452,7 +6503,7 @@ function callPopup(text, type, inputValue = '', { okButton, rows, wide, large } 
     }
     $('#shadow_popup').transition({
         opacity: 1,
-        duration: 200,
+        duration: animation_duration,
         easing: animation_easing,
     });
 
@@ -7652,8 +7703,9 @@ export async function handleDeleteCharacter(popup_type, this_chid, delete_chats)
  *
  * @param {string} name - The name of the character to be deleted.
  * @param {string} avatar - The avatar URL of the character to be deleted.
+ * @param {boolean} reloadCharacters - Whether the character list should be refreshed after deletion.
  */
-export async function deleteCharacter(name, avatar) {
+export async function deleteCharacter(name, avatar, reloadCharacters = true) {
     await clearChat();
     $('#character_cross').click();
     this_chid = 'invalid-safety-id';
@@ -7664,7 +7716,7 @@ export async function deleteCharacter(name, avatar) {
     $(document.getElementById('rm_button_selected_ch')).children('h2').text('');
     this_chid = undefined;
     delete tag_map[avatar];
-    await getCharacters();
+    if (reloadCharacters) await getCharacters();
     select_rm_info('char_delete', name);
     await printMessages();
     saveSettingsDebounced();
@@ -7945,10 +7997,10 @@ jQuery(async function () {
         is_advanced_char_open = false;
         $('#character_popup').transition({
             opacity: 0,
-            duration: 200,
+            duration: animation_duration,
             easing: animation_easing,
         });
-        setTimeout(function () { $('#character_popup').css('display', 'none'); }, 200);
+        setTimeout(function () { $('#character_popup').css('display', 'none'); }, animation_duration);
     });
 
     $('#character_popup_ok').click(function () {
@@ -7960,7 +8012,7 @@ jQuery(async function () {
         dialogueCloseStop = false;
         $('#shadow_popup').transition({
             opacity: 0,
-            duration: 200,
+            duration: animation_duration,
             easing: animation_easing,
         });
         setTimeout(function () {
@@ -7968,7 +8020,7 @@ jQuery(async function () {
             $('#shadow_popup').css('display', 'none');
             $('#dialogue_popup').removeClass('large_dialogue_popup');
             $('#dialogue_popup').removeClass('wide_dialogue_popup');
-        }, 200);
+        }, animation_duration);
 
         //      $("#shadow_popup").css("opacity:", 0.0);
 
@@ -8055,14 +8107,14 @@ jQuery(async function () {
         dialogueCloseStop = false;
         $('#shadow_popup').transition({
             opacity: 0,
-            duration: 200,
+            duration: animation_duration,
             easing: animation_easing,
         });
         setTimeout(function () {
             if (dialogueCloseStop) return;
             $('#shadow_popup').css('display', 'none');
             $('#dialogue_popup').removeClass('large_dialogue_popup');
-        }, 200);
+        }, animation_duration);
 
         //$("#shadow_popup").css("opacity:", 0.0);
         popup_type = '';
@@ -8264,7 +8316,7 @@ jQuery(async function () {
 
             main_api = 'kobold';
             saveSettingsDebounced();
-            getStatus();
+            getStatusKobold();
         }
     });
 
@@ -8300,7 +8352,25 @@ jQuery(async function () {
         startStatusLoading();
         main_api = 'textgenerationwebui';
         saveSettingsDebounced();
-        getStatus();
+        getStatusTextgen();
+    });
+
+    $('#api_button_novel').on('click', async function (e) {
+        e.stopPropagation();
+        const api_key_novel = String($('#api_key_novel').val()).trim();
+
+        if (api_key_novel.length) {
+            await writeSecret(SECRET_KEYS.NOVEL, api_key_novel);
+        }
+
+        if (!secret_state[SECRET_KEYS.NOVEL]) {
+            console.log('No secret key saved for NovelAI');
+            return;
+        }
+
+        startStatusLoading();
+        // Check near immediately rather than waiting for up to 90s
+        await getStatusNovel();
     });
 
     var button = $('#options_button');
@@ -8620,10 +8690,10 @@ jQuery(async function () {
     $('#select_chat_cross').click(function () {
         $('#shadow_select_chat_popup').transition({
             opacity: 0,
-            duration: 200,
+            duration: animation_duration,
             easing: animation_easing,
         });
-        setTimeout(function () { $('#shadow_select_chat_popup').css('display', 'none'); }, 200);
+        setTimeout(function () { $('#shadow_select_chat_popup').css('display', 'none'); }, animation_duration);
         //$("#shadow_select_chat_popup").css("display", "none");
         $('#load_select_chat_div').css('display', 'block');
     });
@@ -8770,7 +8840,7 @@ jQuery(async function () {
         const elmnt = e.target;
         $(elmnt).transition({
             opacity: 0,
-            duration: 150,
+            duration: animation_duration,
             easing: 'ease-in-out',
         });
         setTimeout(function () {
@@ -8779,10 +8849,10 @@ jQuery(async function () {
             $(elmnt).siblings('.extraMesButtons').css('display', 'flex');
             $(elmnt).siblings('.extraMesButtons').transition({
                 opacity: 1,
-                duration: 150,
+                duration: animation_duration,
                 easing: 'ease-in-out',
             });
-        }, 150);
+        }, animation_duration);
     });
 
     $(document).on('click', function (e) {
@@ -8796,7 +8866,7 @@ jQuery(async function () {
             // Transition out the .extraMesButtons first
             $('.extraMesButtons:visible').transition({
                 opacity: 0,
-                duration: 150,
+                duration: animation_duration,
                 easing: 'ease-in-out',
                 complete: function () {
                     $(this).hide(); // Hide the .extraMesButtons after the transition
@@ -8804,7 +8874,7 @@ jQuery(async function () {
                     // Transition the .extraMesButtonsHint back in
                     $('.extraMesButtonsHint:not(:visible)').show().transition({
                         opacity: .3,
-                        duration: 150,
+                        duration: animation_duration,
                         easing: 'ease-in-out',
                         complete: function () {
                             $(this).css('opacity', '');
@@ -8988,24 +9058,6 @@ jQuery(async function () {
         await reloadCurrentChat();
     });
     //Select chat
-
-    $('#api_button_novel').on('click', async function (e) {
-        e.stopPropagation();
-        const api_key_novel = String($('#api_key_novel').val()).trim();
-
-        if (api_key_novel.length) {
-            await writeSecret(SECRET_KEYS.NOVEL, api_key_novel);
-        }
-
-        if (!secret_state[SECRET_KEYS.NOVEL]) {
-            console.log('No secret key saved for NovelAI');
-            return;
-        }
-
-        startStatusLoading();
-        // Check near immediately rather than waiting for up to 90s
-        await getStatusNovel();
-    });
 
     //**************************CHARACTER IMPORT EXPORT*************************//
     $('#character_import_button').click(function () {
