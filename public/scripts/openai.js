@@ -913,6 +913,7 @@ function preparePromptsForChatCompletion({ Scenario, charPersonality, name2, wor
     const scenarioText = Scenario && oai_settings.scenario_format ? substituteParams(oai_settings.scenario_format) : '';
     const charPersonalityText = charPersonality && oai_settings.personality_format ? substituteParams(oai_settings.personality_format) : '';
     const groupNudge = substituteParams(oai_settings.group_nudge_prompt);
+    const impersonationPrompt = oai_settings.impersonation_prompt ? substituteParams(oai_settings.impersonation_prompt) : '';
 
     // Create entries for system prompts
     const systemPrompts = [
@@ -924,7 +925,7 @@ function preparePromptsForChatCompletion({ Scenario, charPersonality, name2, wor
         { role: 'system', content: scenarioText, identifier: 'scenario' },
         { role: 'system', content: personaDescription, identifier: 'personaDescription' },
         // Unordered prompts without marker
-        { role: 'system', content: oai_settings.impersonation_prompt, identifier: 'impersonate' },
+        { role: 'system', content: impersonationPrompt, identifier: 'impersonate' },
         { role: 'system', content: quietPrompt, identifier: 'quietPrompt' },
         { role: 'system', content: bias, identifier: 'bias' },
         { role: 'system', content: groupNudge, identifier: 'groupNudge' },
@@ -2478,28 +2479,6 @@ function showWindowExtensionError() {
     });
 }
 
-function trySelectPresetByName(name) {
-    let preset_found = null;
-    for (const key in openai_setting_names) {
-        if (name.trim() == key.trim()) {
-            preset_found = key;
-            break;
-        }
-    }
-
-    // Don't change if the current preset is the same
-    if (preset_found && preset_found === oai_settings.preset_settings_openai) {
-        return;
-    }
-
-    if (preset_found) {
-        oai_settings.preset_settings_openai = preset_found;
-        const value = openai_setting_names[preset_found];
-        $(`#settings_preset_openai option[value="${value}"]`).attr('selected', true);
-        $('#settings_preset_openai').val(value).trigger('change');
-    }
-}
-
 /**
  * Persist a settings preset with the given name
  *
@@ -3571,29 +3550,6 @@ $(document).ready(async function () {
     $('#group_nudge_prompt_textarea').on('input', function () {
         oai_settings.group_nudge_prompt = String($('#group_nudge_prompt_textarea').val());
         saveSettingsDebounced();
-    });
-
-    // auto-select a preset based on character/group name
-    $(document).on('click', '.character_select', function () {
-        const chid = $(this).attr('chid');
-        const name = characters[chid]?.name;
-
-        if (!name) {
-            return;
-        }
-
-        trySelectPresetByName(name);
-    });
-
-    $(document).on('click', '.group_select', function () {
-        const grid = $(this).data('id');
-        const name = groups.find(x => x.id === grid)?.name;
-
-        if (!name) {
-            return;
-        }
-
-        trySelectPresetByName(name);
     });
 
     $('#update_oai_preset').on('click', async function () {

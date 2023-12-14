@@ -45,7 +45,6 @@ const { jsonParser, urlencodedParser } = require('./src/express-common.js');
 const contentManager = require('./src/endpoints/content-manager');
 const { readSecret, migrateSecrets, SECRET_KEYS } = require('./src/endpoints/secrets');
 const {
-    delay,
     getVersion,
     getConfigValue,
     color,
@@ -61,7 +60,6 @@ const {
 const { ensureThumbnailCache } = require('./src/endpoints/thumbnails');
 const { getTokenizerModel, getTiktokenTokenizer, loadTokenizers, TEXT_COMPLETION_MODELS, getSentencepiceTokenizer, sentencepieceTokenizers } = require('./src/endpoints/tokenizers');
 const { convertClaudePrompt } = require('./src/chat-completion');
-const { getOverrideHeaders, setAdditionalHeaders } = require('./src/additional-headers');
 
 // Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
 // https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
@@ -133,7 +131,7 @@ const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
 
 const SETTINGS_FILE = './public/settings.json';
-const { DIRECTORIES, UPLOADS_PATH, PALM_SAFETY, TEXTGEN_TYPES, CHAT_COMPLETION_SOURCES, AVATAR_WIDTH, AVATAR_HEIGHT } = require('./src/constants');
+const { DIRECTORIES, UPLOADS_PATH, PALM_SAFETY, CHAT_COMPLETION_SOURCES, AVATAR_WIDTH, AVATAR_HEIGHT } = require('./src/constants');
 
 // CORS Settings //
 const CORS = cors({
@@ -311,395 +309,6 @@ app.get('/version', async function (_, response) {
     const data = await getVersion();
     response.send(data);
 });
-
-//**************Kobold api
-app.post('/generate', jsonParser, async function (request, response_generate) {
-    if (!request.body) return response_generate.sendStatus(400);
-
-    if (request.body.api_server.indexOf('localhost') != -1) {
-        request.body.api_server = request.body.api_server.replace('localhost', '127.0.0.1');
-    }
-
-    const request_prompt = request.body.prompt;
-    const controller = new AbortController();
-    request.socket.removeAllListeners('close');
-    request.socket.on('close', async function () {
-        if (request.body.can_abort && !response_generate.writableEnded) {
-            try {
-                console.log('Aborting Kobold generation...');
-                // send abort signal to koboldcpp
-                const abortResponse = await fetch(`${request.body.api_server}/extra/abort`, {
-                    method: 'POST',
-                });
-
-                if (!abortResponse.ok) {
-                    console.log('Error sending abort request to Kobold:', abortResponse.status);
-                }
-            } catch (error) {
-                console.log(error);
-            }
-        }
-        controller.abort();
-    });
-
-    let this_settings = {
-        prompt: request_prompt,
-        use_story: false,
-        use_memory: false,
-        use_authors_note: false,
-        use_world_info: false,
-        max_context_length: request.body.max_context_length,
-        max_length: request.body.max_length,
-    };
-
-    if (request.body.gui_settings == false) {
-        const sampler_order = [request.body.s1, request.body.s2, request.body.s3, request.body.s4, request.body.s5, request.body.s6, request.body.s7];
-        this_settings = {
-            prompt: request_prompt,
-            use_story: false,
-            use_memory: false,
-            use_authors_note: false,
-            use_world_info: false,
-            max_context_length: request.body.max_context_length,
-            max_length: request.body.max_length,
-            rep_pen: request.body.rep_pen,
-            rep_pen_range: request.body.rep_pen_range,
-            rep_pen_slope: request.body.rep_pen_slope,
-            temperature: request.body.temperature,
-            tfs: request.body.tfs,
-            top_a: request.body.top_a,
-            top_k: request.body.top_k,
-            top_p: request.body.top_p,
-            min_p: request.body.min_p,
-            typical: request.body.typical,
-            sampler_order: sampler_order,
-            singleline: !!request.body.singleline,
-            use_default_badwordsids: request.body.use_default_badwordsids,
-            mirostat: request.body.mirostat,
-            mirostat_eta: request.body.mirostat_eta,
-            mirostat_tau: request.body.mirostat_tau,
-            grammar: request.body.grammar,
-            sampler_seed: request.body.sampler_seed,
-        };
-        if (request.body.stop_sequence) {
-            this_settings['stop_sequence'] = request.body.stop_sequence;
-        }
-    }
-
-    console.log(this_settings);
-    const args = {
-        body: JSON.stringify(this_settings),
-        headers: Object.assign(
-            { 'Content-Type': 'application/json' },
-            getOverrideHeaders((new URL(request.body.api_server))?.host),
-        ),
-        signal: controller.signal,
-    };
-
-    const MAX_RETRIES = 50;
-    const delayAmount = 2500;
-    for (let i = 0; i < MAX_RETRIES; i++) {
-        try {
-            const url = request.body.streaming ? `${request.body.api_server}/extra/generate/stream` : `${request.body.api_server}/v1/generate`;
-            const response = await fetch(url, { method: 'POST', timeout: 0, ...args });
-
-            if (request.body.streaming) {
-                // Pipe remote SSE stream to Express response
-                forwardFetchResponse(response, response_generate);
-                return;
-            } else {
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.log(`Kobold returned error: ${response.status} ${response.statusText} ${errorText}`);
-
-                    try {
-                        const errorJson = JSON.parse(errorText);
-                        const message = errorJson?.detail?.msg || errorText;
-                        return response_generate.status(400).send({ error: { message } });
-                    } catch {
-                        return response_generate.status(400).send({ error: { message: errorText } });
-                    }
-                }
-
-                const data = await response.json();
-                console.log('Endpoint response:', data);
-                return response_generate.send(data);
-            }
-        } catch (error) {
-            // response
-            switch (error?.status) {
-                case 403:
-                case 503: // retry in case of temporary service issue, possibly caused by a queue failure?
-                    console.debug(`KoboldAI is busy. Retry attempt ${i + 1} of ${MAX_RETRIES}...`);
-                    await delay(delayAmount);
-                    break;
-                default:
-                    if ('status' in error) {
-                        console.log('Status Code from Kobold:', error.status);
-                    }
-                    return response_generate.send({ error: true });
-            }
-        }
-    }
-
-    console.log('Max retries exceeded. Giving up.');
-    return response_generate.send({ error: true });
-});
-
-//************** Text generation web UI
-app.post('/api/textgenerationwebui/status', jsonParser, async function (request, response) {
-    if (!request.body) return response.sendStatus(400);
-
-    try {
-        if (request.body.api_server.indexOf('localhost') !== -1) {
-            request.body.api_server = request.body.api_server.replace('localhost', '127.0.0.1');
-        }
-
-        console.log('Trying to connect to API:', request.body);
-
-        // Convert to string + remove trailing slash + /v1 suffix
-        const baseUrl = String(request.body.api_server).replace(/\/$/, '').replace(/\/v1$/, '');
-
-        const args = {
-            headers: { 'Content-Type': 'application/json' },
-        };
-
-        setAdditionalHeaders(request, args, baseUrl);
-
-        let url = baseUrl;
-        let result = '';
-
-        if (request.body.legacy_api) {
-            url += '/v1/model';
-        } else {
-            switch (request.body.api_type) {
-                case TEXTGEN_TYPES.OOBA:
-                case TEXTGEN_TYPES.APHRODITE:
-                case TEXTGEN_TYPES.KOBOLDCPP:
-                    url += '/v1/models';
-                    break;
-                case TEXTGEN_TYPES.MANCER:
-                    url += '/oai/v1/models';
-                    break;
-                case TEXTGEN_TYPES.TABBY:
-                    url += '/v1/model/list';
-                    break;
-            }
-        }
-
-        const modelsReply = await fetch(url, args);
-
-        if (!modelsReply.ok) {
-            console.log('Models endpoint is offline.');
-            return response.status(400);
-        }
-
-        const data = await modelsReply.json();
-
-        if (request.body.legacy_api) {
-            console.log('Legacy API response:', data);
-            return response.send({ result: data?.result });
-        }
-
-        if (!Array.isArray(data.data)) {
-            console.log('Models response is not an array.');
-            return response.status(400);
-        }
-
-        const modelIds = data.data.map(x => x.id);
-        console.log('Models available:', modelIds);
-
-        // Set result to the first model ID
-        result = modelIds[0] || 'Valid';
-
-        if (request.body.api_type === TEXTGEN_TYPES.OOBA) {
-            try {
-                const modelInfoUrl = baseUrl + '/v1/internal/model/info';
-                const modelInfoReply = await fetch(modelInfoUrl, args);
-
-                if (modelInfoReply.ok) {
-                    const modelInfo = await modelInfoReply.json();
-                    console.log('Ooba model info:', modelInfo);
-
-                    const modelName = modelInfo?.model_name;
-                    result = modelName || result;
-                }
-            } catch (error) {
-                console.error(`Failed to get Ooba model info: ${error}`);
-            }
-        } else if (request.body.api_type === TEXTGEN_TYPES.TABBY) {
-            try {
-                const modelInfoUrl = baseUrl + '/v1/model';
-                const modelInfoReply = await fetch(modelInfoUrl, args);
-
-                if (modelInfoReply.ok) {
-                    const modelInfo = await modelInfoReply.json();
-                    console.log('Tabby model info:', modelInfo);
-
-                    const modelName = modelInfo?.id;
-                    result = modelName || result;
-                } else {
-                    // TabbyAPI returns an error 400 if a model isn't loaded
-
-                    result = 'None';
-                }
-            } catch (error) {
-                console.error(`Failed to get TabbyAPI model info: ${error}`);
-            }
-        }
-
-        return response.send({ result, data: data.data });
-    } catch (error) {
-        console.error(error);
-        return response.status(500);
-    }
-});
-
-app.post('/api/textgenerationwebui/generate', jsonParser, async function (request, response_generate) {
-    if (!request.body) return response_generate.sendStatus(400);
-
-    try {
-        if (request.body.api_server.indexOf('localhost') !== -1) {
-            request.body.api_server = request.body.api_server.replace('localhost', '127.0.0.1');
-        }
-
-        const baseUrl = request.body.api_server;
-        console.log(request.body);
-
-        const controller = new AbortController();
-        request.socket.removeAllListeners('close');
-        request.socket.on('close', function () {
-            controller.abort();
-        });
-
-        // Convert to string + remove trailing slash + /v1 suffix
-        let url = String(baseUrl).replace(/\/$/, '').replace(/\/v1$/, '');
-
-        if (request.body.legacy_api) {
-            url += '/v1/generate';
-        } else {
-            switch (request.body.api_type) {
-                case TEXTGEN_TYPES.APHRODITE:
-                case TEXTGEN_TYPES.OOBA:
-                case TEXTGEN_TYPES.TABBY:
-                case TEXTGEN_TYPES.KOBOLDCPP:
-                    url += '/v1/completions';
-                    break;
-                case TEXTGEN_TYPES.MANCER:
-                    url += '/oai/v1/completions';
-                    break;
-            }
-        }
-
-        const args = {
-            method: 'POST',
-            body: JSON.stringify(request.body),
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            timeout: 0,
-        };
-
-        setAdditionalHeaders(request, args, baseUrl);
-
-        if (request.body.stream) {
-            const completionsStream = await fetch(url, args);
-            // Pipe remote SSE stream to Express response
-            forwardFetchResponse(completionsStream, response_generate);
-        }
-        else {
-            const completionsReply = await fetch(url, args);
-
-            if (completionsReply.ok) {
-                const data = await completionsReply.json();
-                console.log('Endpoint response:', data);
-
-                // Wrap legacy response to OAI completions format
-                if (request.body.legacy_api) {
-                    const text = data?.results[0]?.text;
-                    data['choices'] = [{ text }];
-                }
-
-                return response_generate.send(data);
-            } else {
-                const text = await completionsReply.text();
-                const errorBody = { error: true, status: completionsReply.status, response: text };
-
-                if (!response_generate.headersSent) {
-                    return response_generate.send(errorBody);
-                }
-
-                return response_generate.end();
-            }
-        }
-    } catch (error) {
-        let value = { error: true, status: error?.status, response: error?.statusText };
-        console.log('Endpoint error:', error);
-
-        if (!response_generate.headersSent) {
-            return response_generate.send(value);
-        }
-
-        return response_generate.end();
-    }
-});
-
-// Only called for kobold
-app.post('/getstatus', jsonParser, async function (request, response) {
-    if (!request.body) return response.sendStatus(400);
-    let api_server = request.body.api_server;
-    if (api_server.indexOf('localhost') != -1) {
-        api_server = api_server.replace('localhost', '127.0.0.1');
-    }
-
-    const args = {
-        headers: { 'Content-Type': 'application/json' },
-    };
-
-    setAdditionalHeaders(request, args, api_server);
-
-    const url = api_server + '/v1/model';
-    let version = '';
-    let koboldVersion = {};
-
-    if (request.body.main_api == 'kobold') {
-        try {
-            version = (await fetchJSON(api_server + '/v1/info/version')).result;
-        }
-        catch {
-            version = '0.0.0';
-        }
-        try {
-            koboldVersion = (await fetchJSON(api_server + '/extra/version'));
-        }
-        catch {
-            koboldVersion = {
-                result: 'Kobold',
-                version: '0.0',
-            };
-        }
-    }
-
-    try {
-        let data = await fetchJSON(url, args);
-
-        if (!data || typeof data !== 'object') {
-            data = {};
-        }
-
-        if (data.result == 'ReadOnly') {
-            data.result = 'no_connection';
-        }
-
-        data.version = version;
-        data.koboldVersion = koboldVersion;
-
-        return response.send(data);
-    } catch (error) {
-        console.log(error);
-        return response.send({ result: 'no_connection' });
-    }
-});
-
 
 app.post('/getuseravatars', jsonParser, function (request, response) {
     var images = getImages('public/User Avatars');
@@ -1753,27 +1362,6 @@ redirect('/delbackground', '/api/backgrounds/delete');
 redirect('/renamebackground', '/api/backgrounds/rename');
 redirect('/downloadbackground', '/api/backgrounds/upload'); // yes, the downloadbackground endpoint actually uploads one
 
-// ** REST CLIENT ASYNC WRAPPERS **
-
-/**
- * Convenience function for fetch requests (default GET) returning as JSON.
- * @param {string} url
- * @param {import('node-fetch').RequestInit} args
- */
-async function fetchJSON(url, args = {}) {
-    if (args.method === undefined) args.method = 'GET';
-    const response = await fetch(url, args);
-
-    if (response.ok) {
-        const data = await response.json();
-        return data;
-    }
-
-    throw response;
-}
-
-// ** END **
-
 // OpenAI API
 app.use('/api/openai', require('./src/endpoints/openai').router);
 
@@ -1846,6 +1434,14 @@ app.use('/api/extra/caption', require('./src/endpoints/caption').router);
 
 // Web search extension
 app.use('/api/serpapi', require('./src/endpoints/serpapi').router);
+
+// The different text generation APIs
+
+// Ooba/OpenAI text completions
+app.use('/api/backends/text-completions', require('./src/endpoints/backends/text-completions').router);
+
+// KoboldAI
+app.use('/api/backends/kobold', require('./src/endpoints/backends/kobold').router);
 
 const tavernUrl = new URL(
     (cliArguments.ssl ? 'https://' : 'http://') +
