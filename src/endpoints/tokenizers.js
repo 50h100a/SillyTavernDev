@@ -4,7 +4,7 @@ const express = require('express');
 const { SentencePieceProcessor } = require('@agnai/sentencepiece-js');
 const tiktoken = require('@dqbd/tiktoken');
 const { Tokenizer } = require('@agnai/web-tokenizers');
-const { convertClaudePrompt } = require('../chat-completion');
+const { convertClaudePrompt, convertGooglePrompt } = require('./prompt-converters');
 const { readSecret, SECRET_KEYS } = require('./secrets');
 const { TEXTGEN_TYPES } = require('../constants');
 const { jsonParser } = require('../express-common');
@@ -298,11 +298,13 @@ function createSentencepieceDecodingHandler(tokenizer) {
 
             const ids = request.body.ids || [];
             const instance = await tokenizer?.get();
-            const text = await instance?.decodeIds(ids);
-            return response.send({ text });
+            const ops = ids.map(id => instance.decodeIds([id]));
+            const chunks = await Promise.all(ops);
+            const text = chunks.join('');
+            return response.send({ text, chunks });
         } catch (error) {
             console.log(error);
-            return response.send({ text: '' });
+            return response.send({ text: '', chunks: [] });
         }
     };
 }
@@ -381,6 +383,26 @@ router.post('/ai21/count', jsonParser, async function (req, res) {
         const response = await fetch('https://api.ai21.com/studio/v1/tokenize', options);
         const data = await response.json();
         return res.send({ 'token_count': data?.tokens?.length || 0 });
+    } catch (err) {
+        console.error(err);
+        return res.send({ 'token_count': 0 });
+    }
+});
+
+router.post('/google/count', jsonParser, async function (req, res) {
+    if (!req.body) return res.sendStatus(400);
+    const options = {
+        method: 'POST',
+        headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+        },
+        body: JSON.stringify({ contents: convertGooglePrompt(req.body) }),
+    };
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${req.query.model}:countTokens?key=${readSecret(SECRET_KEYS.MAKERSUITE)}`, options);
+        const data = await response.json();
+        return res.send({ 'token_count': data?.totalTokens || 0 });
     } catch (err) {
         console.error(err);
         return res.send({ 'token_count': 0 });
@@ -602,6 +624,14 @@ router.post('/remote/textgenerationwebui/encode', jsonParser, async function (re
                     url += '/api/extra/tokencount';
                     args.body = JSON.stringify({ 'prompt': text });
                     break;
+                case TEXTGEN_TYPES.LLAMACPP:
+                    url += '/tokenize';
+                    args.body = JSON.stringify({ 'content': text });
+                    break;
+                case TEXTGEN_TYPES.APHRODITE:
+                    url += '/v1/tokenize';
+                    args.body = JSON.stringify({ 'prompt': text });
+                    break;
                 default:
                     url += '/v1/internal/encode';
                     args.body = JSON.stringify({ 'text': text });
@@ -617,7 +647,7 @@ router.post('/remote/textgenerationwebui/encode', jsonParser, async function (re
         }
 
         const data = await result.json();
-        const count = legacyApi ? data?.results[0]?.tokens : (data?.length ?? data?.value);
+        const count = legacyApi ? data?.results[0]?.tokens : (data?.length ?? data?.value ?? data?.tokens?.length);
         const ids = legacyApi ? [] : (data?.tokens ?? data?.ids ?? []);
 
         return response.send({ count, ids });

@@ -108,11 +108,20 @@ export const group_activation_strategy = {
 export const group_generation_mode = {
     SWAP: 0,
     APPEND: 1,
+    APPEND_DISABLED: 2,
 };
 
+const DEFAULT_AUTO_MODE_DELAY = 5;
+
 export const groupCandidatesFilter = new FilterHelper(debounce(printGroupCandidates, 100));
-setInterval(groupChatAutoModeWorker, 5000);
+let autoModeWorker = null;
 const saveGroupDebounced = debounce(async (group, reload) => await _save(group, reload), 500);
+
+function setAutoModeWorker() {
+    clearInterval(autoModeWorker);
+    const autoModeDelay = groups.find(x => x.id === selected_group)?.auto_mode_delay ?? DEFAULT_AUTO_MODE_DELAY;
+    autoModeWorker = setInterval(groupChatAutoModeWorker, autoModeDelay * 1000);
+}
 
 async function _save(group, reload = true) {
     await fetch('/api/groups/edit', {
@@ -317,7 +326,7 @@ export function getGroupDepthPrompts(groupId, characterId) {
 }
 
 /**
- * Combines group members info a single string. Only for groups with generation mode set to APPEND.
+ * Combines group members cards into a single string. Only for groups with generation mode set to APPEND or APPEND_DISABLED.
  * @param {string} groupId Group ID
  * @param {number} characterId Current Character ID
  * @returns {{description: string, personality: string, scenario: string, mesExamples: string}} Group character cards combined
@@ -326,7 +335,7 @@ export function getGroupCharacterCards(groupId, characterId) {
     console.debug('getGroupCharacterCards entered for group: ', groupId);
     const group = groups.find(x => x.id === groupId);
 
-    if (!group || group?.generation_mode !== group_generation_mode.APPEND || !Array.isArray(group.members) || !group.members.length) {
+    if (!group || !group?.generation_mode || !Array.isArray(group.members) || !group.members.length) {
         return null;
     }
 
@@ -346,7 +355,7 @@ export function getGroupCharacterCards(groupId, characterId) {
             continue;
         }
 
-        if (group.disabled_members.includes(member) && characterId !== index) {
+        if (group.disabled_members.includes(member) && characterId !== index && group.generation_mode !== group_generation_mode.APPEND_DISABLED) {
             console.debug(`Skipping disabled group member: ${member}`);
             continue;
         }
@@ -721,6 +730,7 @@ async function generateGroupWrapper(by_auto_mode, type = null, params = {}) {
             const generateType = type == 'swipe' || type == 'impersonate' || type == 'quiet' || type == 'continue' ? type : 'group_chat';
             setCharacterId(chId);
             setCharacterName(characters[chId].name);
+            await eventSource.emit(event_types.GROUP_MEMBER_DRAFTED, chId);
 
             if (type !== 'swipe' && type !== 'impersonate' && !isStreamingEnabled()) {
                 // update indicator and scroll down
@@ -1035,6 +1045,15 @@ async function onGroupGenerationModeInput(e) {
     }
 }
 
+async function onGroupAutoModeDelayInput(e) {
+    if (openGroupId) {
+        let _thisGroup = groups.find((x) => x.id == openGroupId);
+        _thisGroup.auto_mode_delay = Number(e.target.value);
+        await editGroup(openGroupId, false, false);
+        setAutoModeWorker();
+    }
+}
+
 async function onGroupNameInput() {
     if (openGroupId) {
         let _thisGroup = groups.find((x) => x.id == openGroupId);
@@ -1091,7 +1110,7 @@ function printGroupCandidates() {
         showNavigator: true,
         showSizeChanger: true,
         pageSize: Number(localStorage.getItem(storageKey)) || 5,
-        sizeChangerOptions: [5, 10, 25, 50, 100, 200],
+        sizeChangerOptions: [5, 10, 25, 50, 100, 200, 500, 1000],
         afterSizeSelectorChange: function (e) {
             localStorage.setItem(storageKey, e.target.value);
         },
@@ -1118,7 +1137,7 @@ function printGroupMembers() {
             showNavigator: true,
             showSizeChanger: true,
             pageSize: Number(localStorage.getItem(storageKey)) || 5,
-            sizeChangerOptions: [5, 10, 25, 50, 100, 200],
+            sizeChangerOptions: [5, 10, 25, 50, 100, 200, 500, 1000],
             afterSizeSelectorChange: function (e) {
                 localStorage.setItem(storageKey, e.target.value);
             },
@@ -1231,6 +1250,7 @@ function select_group_chats(groupId, skipAnimation) {
     $('#rm_group_submit').prop('disabled', !groupHasMembers);
     $('#rm_group_allow_self_responses').prop('checked', group && group.allow_self_responses);
     $('#rm_group_hidemutedsprites').prop('checked', group && group.hideMutedSprites);
+    $('#rm_group_automode_delay').val(group?.auto_mode_delay ?? DEFAULT_AUTO_MODE_DELAY);
 
     // bottom buttons
     if (openGroupId) {
@@ -1249,6 +1269,7 @@ function select_group_chats(groupId, skipAnimation) {
     }
 
     updateFavButtonState(group?.fav ?? false);
+    setAutoModeWorker();
 
     // top bar
     if (group) {
@@ -1441,6 +1462,7 @@ async function createGroup() {
     let allowSelfResponses = !!$('#rm_group_allow_self_responses').prop('checked');
     let activationStrategy = Number($('#rm_group_activation_strategy').find(':selected').val()) ?? group_activation_strategy.NATURAL;
     let generationMode = Number($('#rm_group_generation_mode').find(':selected').val()) ?? group_generation_mode.SWAP;
+    let autoModeDelay = Number($('#rm_group_automode_delay').val()) ?? DEFAULT_AUTO_MODE_DELAY;
     const members = newGroupMembers;
     const memberNames = characters.filter(x => members.includes(x.avatar)).map(x => x.name).join(', ');
 
@@ -1469,6 +1491,7 @@ async function createGroup() {
             fav: fav_grp_checked,
             chat_id: chatName,
             chats: chats,
+            auto_mode_delay: autoModeDelay,
         }),
     });
 
@@ -1741,6 +1764,7 @@ jQuery(() => {
     $('#rm_group_allow_self_responses').on('input', onGroupSelfResponsesClick);
     $('#rm_group_activation_strategy').on('change', onGroupActivationStrategyInput);
     $('#rm_group_generation_mode').on('change', onGroupGenerationModeInput);
+    $('#rm_group_automode_delay').on('input', onGroupAutoModeDelayInput);
     $('#group_avatar_button').on('input', uploadGroupAvatar);
     $('#rm_group_restore_avatar').on('click', restoreGroupAvatar);
     $(document).on('click', '.group_member .right_menu_button', onGroupActionClick);

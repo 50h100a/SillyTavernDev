@@ -471,14 +471,18 @@ export function sortByCssOrder(a, b) {
  * trimToEndSentence('Hello, world! I am from'); // 'Hello, world!'
  */
 export function trimToEndSentence(input, include_newline = false) {
-    const punctuation = new Set(['.', '!', '?', '*', '"', ')', '}', '`', ']', '$', '。', '！', '？', '”', '）', '】', '】', '’', '」', '】']); // extend this as you see fit
+    const punctuation = new Set(['.', '!', '?', '*', '"', ')', '}', '`', ']', '$', '。', '！', '？', '”', '）', '】', '’', '」']); // extend this as you see fit
     let last = -1;
 
     for (let i = input.length - 1; i >= 0; i--) {
         const char = input[i];
 
         if (punctuation.has(char)) {
-            last = i;
+            if (i > 0 && /[\s\n]/.test(input[i - 1])) {
+                last = i - 1;
+            } else {
+                last = i;
+            }
             break;
         }
 
@@ -1030,6 +1034,11 @@ export function loadFileToDocument(url, type) {
  * @returns {Promise<string>} A promise that resolves to the thumbnail data URL.
  */
 export function createThumbnail(dataUrl, maxWidth, maxHeight, type = 'image/jpeg') {
+    // Someone might pass in a base64 encoded string without the data URL prefix
+    if (!dataUrl.includes('data:')) {
+        dataUrl = `data:image/jpeg;base64,${dataUrl}`;
+    }
+
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.src = dataUrl;

@@ -1,5 +1,9 @@
 /*will apply to anything 1000px or less. this catches ipads, horizontal phones, and vertical phones)*/
 @media screen and (max-width: 1000px) {
+    #send_form.compact #leftSendForm, #send_form.compact #rightSendForm {
+        flex-wrap: nowrap;
+        width: unset;
+    }
 
     .bg_button {
         font-size: 15px;
@@ -196,7 +200,8 @@
     #right-nav-panel,
     #left-nav-panel,
     #floatingPrompt,
-    #cfgConfig {
+    #cfgConfig,
+    #logprobsViewer {
         height: calc(100vh - 45px);
         height: calc(100svh - 45px);
         min-width: 100% !important;
@@ -213,7 +218,8 @@
     }
 
     #floatingPrompt,
-    #cfgConfig {
+    #cfgConfig,
+    #logprobsViewer {
         height: min-content;
     }
 

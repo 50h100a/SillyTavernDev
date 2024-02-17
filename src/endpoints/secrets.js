@@ -17,14 +17,19 @@ const SECRET_KEYS = {
     DEEPL: 'deepl',
     LIBRE: 'libre',
     LIBRE_URL: 'libre_url',
+    LINGVA_URL: 'lingva_url',
     OPENROUTER: 'api_key_openrouter',
     SCALE: 'api_key_scale',
     AI21: 'api_key_ai21',
     SCALE_COOKIE: 'scale_cookie',
     ONERING_URL: 'oneringtranslator_url',
     DEEPLX_URL: 'deeplx_url',
-    PALM: 'api_key_palm',
+    MAKERSUITE: 'api_key_makersuite',
     SERPAPI: 'api_key_serpapi',
+    TOGETHERAI: 'api_key_togetherai',
+    MISTRALAI: 'api_key_mistralai',
+    CUSTOM: 'api_key_custom',
+    OOBA: 'api_key_ooba',
 };
 
 /**
@@ -41,6 +46,17 @@ function writeSecret(key, value) {
     const fileContents = fs.readFileSync(SECRETS_FILE, 'utf-8');
     const secrets = JSON.parse(fileContents);
     secrets[key] = value;
+    writeFileAtomicSync(SECRETS_FILE, JSON.stringify(secrets, null, 4), 'utf-8');
+}
+
+function deleteSecret(key) {
+    if (!fs.existsSync(SECRETS_FILE)) {
+        return;
+    }
+
+    const fileContents = fs.readFileSync(SECRETS_FILE, 'utf-8');
+    const secrets = JSON.parse(fileContents);
+    delete secrets[key];
     writeFileAtomicSync(SECRETS_FILE, JSON.stringify(secrets, null, 4), 'utf-8');
 }
 
@@ -85,6 +101,13 @@ function readSecretState() {
  * @returns {void}
  */
 function migrateSecrets(settingsFile) {
+    const palmKey = readSecret('api_key_palm');
+    if (palmKey) {
+        console.log('Migrating Palm key...');
+        writeSecret(SECRET_KEYS.MAKERSUITE, palmKey);
+        deleteSecret('api_key_palm');
+    }
+
     if (!fs.existsSync(settingsFile)) {
         console.log('Settings file does not exist');
         return;
