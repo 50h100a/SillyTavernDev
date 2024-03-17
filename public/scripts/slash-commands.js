@@ -38,8 +38,10 @@ import { hideChatMessage, unhideChatMessage } from './chats.js';
 import { getContext, saveMetadataDebounced } from './extensions.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { findGroupMemberId, groups, is_group_generating, openGroupById, resetSelectedGroup, saveGroupChat, selected_group } from './group-chats.js';
+import { chat_completion_sources, oai_settings } from './openai.js';
 import { autoSelectPersona } from './personas.js';
 import { addEphemeralStoppingString, chat_styles, flushEphemeralStoppingStrings, power_user } from './power-user.js';
+import { textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
 import { decodeTextTokens, getFriendlyTokenizerName, getTextTokens, getTokenCount } from './tokenizers.js';
 import { delay, isFalseBoolean, isTrueBoolean, stringToRange, trimToEndSentence, trimToStartSentence, waitUntilCondition } from './utils.js';
 import { registerVariableCommands, resolveVariable } from './variables.js';
@@ -76,48 +78,93 @@ class SlashCommandParser {
         this.helpStrings[command] = stringBuilder;
     }
 
+    /**
+     * Parses a slash command to extract the command name, the (named) arguments and the remaining text
+     * @param {string} text - Slash command text
+     * @returns {{command: string, args: object, value: string}} - The parsed command, its arguments and the remaining text
+     */
     parse(text) {
+        // Parses a command even when spaces are present in arguments
+        // /buttons labels=["OK","I do not accept"] some text
+        // /fuzzy list=[ "red pink" , "yellow" ] threshold=" 0.6 " he yelled when the color was reddish and not pink | /echo
         const excludedFromRegex = ['sendas'];
-        const firstSpace = text.indexOf(' ');
-        const command = firstSpace !== -1 ? text.substring(1, firstSpace) : text.substring(1);
-        let args = firstSpace !== -1 ? text.substring(firstSpace + 1) : '';
+        let command = '';
         const argObj = {};
-        let unnamedArg;
+        let unnamedArg = '';
 
-        if (args.length > 0) {
-            let match;
-
-            // Match unnamed argument
-            const unnamedArgPattern = /(?:\w+=(?:"(?:\\.|[^"\\])*"|\S+)\s*)*(.*)/s;
-            match = unnamedArgPattern.exec(args);
-            if (match !== null && match[1].length > 0) {
-                args = args.slice(0, -match[1].length);
-                unnamedArg = match[1].trim();
-            }
-
-            // Match named arguments
-            const namedArgPattern = /(\w+)=("(?:\\.|[^"\\])*"|\S+)/g;
-            while ((match = namedArgPattern.exec(args)) !== null) {
-                const key = match[1];
-                const value = match[2];
-                // Remove the quotes around the value, if any
-                argObj[key] = value.replace(/(^")|("$)/g, '');
-            }
-
-            // Excluded commands format in their own function
-            if (!excludedFromRegex.includes(command)) {
-                unnamedArg = getRegexedString(
-                    unnamedArg,
-                    regex_placement.SLASH_COMMAND,
-                );
-            }
+        // extract the command " /fuzzy   " => "fuzzy"
+        text = text.trim();
+        let remainingText = '';
+        const commandArgPattern = /^\/([^\s]+)\s*(.*)$/s;
+        let match = commandArgPattern.exec(text);
+        if (match !== null && match[1].length > 0) {
+            command = match[1];
+            remainingText = match[2];
+            console.debug('command:' + command);
         }
 
+        // parse the rest of the string to extract named arguments, the remainder is the "unnamedArg" which is usually text, like the prompt to send
+        while (remainingText.length > 0) {
+            // does the remaining text is like     nameArg=[value]   or  nameArg=[value,value] or  nameArg=[  value , value , value]
+            // where value can be a string like   " this is some text "  , note previously it was not possible to have have spaces
+            // where value can be a scalar like   AScalar
+            // where value can be a number like   +9   -1005.44
+            // where value can be a macro like    {{getvar::name}}
+            const namedArrayArgPattern = /^(\w+)=\[\s*(((?<quote>["'])[^"]*(\k<quote>)|{{[^}]*}}|[+-]?\d*\.?\d+|\w*)\s*,?\s*)+\]/s;
+            match = namedArrayArgPattern.exec(remainingText);
+            if (match !== null && match[0].length > 0) {
+                //console.log(`matching: ${match[0]}`);
+                const posFirstEqual = match[0].indexOf('=');
+                const key = match[0].substring(0, posFirstEqual).trim();
+                const value = match[0].substring(posFirstEqual + 1).trim();
+
+                // Remove the quotes around the value, if any
+                argObj[key] = value.replace(/(^")|("$)/g, '');
+                remainingText = remainingText.slice(match[0].length + 1).trim();
+                continue;
+            }
+
+            // does the remaining text is like     nameArg=value
+            // where value can be a string like   " this is some text "  , note previously it was not possible to have have spaces
+            // where value can be a scalar like   AScalar
+            // where value can be a number like   +9   -1005.44
+            // where value can be a macro like    {{getvar::name}}
+            const namedScalarArgPattern = /^(\w+)=(((?<quote>["'])[^"]*(\k<quote>)|{{[^}]*}}|[+-]?\d*\.?\d+|\w*))/s;
+            match = namedScalarArgPattern.exec(remainingText);
+            if (match !== null && match[0].length > 0) {
+                //console.log(`matching: ${match[0]}`);
+                const posFirstEqual = match[0].indexOf('=');
+                const key = match[0].substring(0, posFirstEqual).trim();
+                const value = match[0].substring(posFirstEqual + 1).trim();
+
+                // Remove the quotes around the value, if any
+                argObj[key] = value.replace(/(^")|("$)/g, '');
+                remainingText = remainingText.slice(match[0].length + 1).trim();
+                continue;
+            }
+
+            // the remainder that matches no named argument is the "unamedArg" previously mentioned
+            unnamedArg = remainingText.trim();
+            remainingText = '';
+        }
+
+        // Excluded commands format in their own function
+        if (!excludedFromRegex.includes(command)) {
+            console.debug(`parse: !excludedFromRegex.includes(${command}`);
+            console.debug(`   parse: unnamedArg before: ${unnamedArg}`);
+            unnamedArg = getRegexedString(
+                unnamedArg,
+                regex_placement.SLASH_COMMAND,
+            );
+            console.debug(`   parse: unnamedArg after: ${unnamedArg}`);
+        }
+
+        // your weird complex command is now transformed into a juicy tiny text or something useful :)
         if (this.commands[command]) {
             return { command: this.commands[command], args: argObj, value: unnamedArg };
         }
 
-        return false;
+        return null;
     }
 
     getHelpString() {
@@ -188,6 +235,7 @@ parser.addCommand('inject', injectCallback, [], '<span class="monospace">id=inje
 parser.addCommand('listinjects', listInjectsCallback, [], ' – lists all script injections for the current chat.', true, true);
 parser.addCommand('flushinjects', flushInjectsCallback, [], ' – removes all script injections for the current chat.', true, true);
 parser.addCommand('tokens', (_, text) => getTokenCount(text), [], '<span class="monospace">(text)</span> – counts the number of tokens in the text.', true, true);
+parser.addCommand('model', modelCallback, [], '<span class="monospace">(model name)</span> – sets the model for the current API.', true, true);
 registerVariableCommands();
 
 const NARRATOR_NAME_KEY = 'narrator_name';
@@ -1540,6 +1588,97 @@ function setBackgroundCallback(_, bg) {
 }
 
 /**
+ * Sets a model for the current API.
+ * @param {object} _ Unused
+ * @param {string} model Model name
+ * @returns {void}
+ */
+function modelCallback(_, model) {
+    if (!model) {
+        return;
+    }
+
+    console.log('Set model to ' + model);
+
+    const modelSelectMap = [
+        { id: 'model_togetherai_select', api: 'textgenerationwebui', type: textgen_types.TOGETHERAI },
+        { id: 'openrouter_model', api: 'textgenerationwebui', type: textgen_types.OPENROUTER },
+        { id: 'model_infermaticai_select', api: 'textgenerationwebui', type: textgen_types.INFERMATICAI },
+        { id: 'model_dreamgen_select', api: 'textgenerationwebui', type: textgen_types.DREAMGEN },
+        { id: 'mancer_model', api: 'textgenerationwebui', type: textgen_types.MANCER },
+        { id: 'aphrodite_model', api: 'textgenerationwebui', type: textgen_types.APHRODITE },
+        { id: 'ollama_model', api: 'textgenerationwebui', type: textgen_types.OLLAMA },
+        { id: 'model_openai_select', api: 'openai', type: chat_completion_sources.OPENAI },
+        { id: 'model_claude_select', api: 'openai', type: chat_completion_sources.CLAUDE },
+        { id: 'model_windowai_select', api: 'openai', type: chat_completion_sources.WINDOWAI },
+        { id: 'model_openrouter_select', api: 'openai', type: chat_completion_sources.OPENROUTER },
+        { id: 'model_ai21_select', api: 'openai', type: chat_completion_sources.AI21 },
+        { id: 'model_google_select', api: 'openai', type: chat_completion_sources.MAKERSUITE },
+        { id: 'model_mistralai_select', api: 'openai', type: chat_completion_sources.MISTRALAI },
+        { id: 'model_custom_select', api: 'openai', type: chat_completion_sources.CUSTOM },
+        { id: 'model_novel_select', api: 'novel', type: null },
+        { id: 'horde_model', api: 'koboldhorde', type: null },
+    ];
+
+    function getSubType() {
+        switch (main_api) {
+            case 'textgenerationwebui':
+                return textgenerationwebui_settings.type;
+            case 'openai':
+                return oai_settings.chat_completion_source;
+            default:
+                return null;
+        }
+    }
+
+    const apiSubType = getSubType();
+    const modelSelectItem = modelSelectMap.find(x => x.api == main_api && x.type == apiSubType)?.id;
+
+    if (!modelSelectItem) {
+        toastr.info('Setting a model for your API is not supported or not implemented yet.');
+        return;
+    }
+
+    const modelSelectControl = document.getElementById(modelSelectItem);
+
+    if (!(modelSelectControl instanceof HTMLSelectElement)) {
+        toastr.error(`Model select control not found: ${main_api}[${apiSubType}]`);
+        return;
+    }
+
+    const options = Array.from(modelSelectControl.options);
+
+    if (!options.length) {
+        toastr.warning('No model options found. Check your API settings.');
+        return;
+    }
+
+    let newSelectedOption = null;
+
+    const fuse = new Fuse(options, { keys: ['text', 'value'] });
+    const fuzzySearchResult = fuse.search(model);
+
+    const exactValueMatch = options.find(x => x.value.trim().toLowerCase() === model.trim().toLowerCase());
+    const exactTextMatch = options.find(x => x.text.trim().toLowerCase() === model.trim().toLowerCase());
+
+    if (exactValueMatch) {
+        newSelectedOption = exactValueMatch;
+    } else if (exactTextMatch) {
+        newSelectedOption = exactTextMatch;
+    } else if (fuzzySearchResult.length) {
+        newSelectedOption = fuzzySearchResult[0].item;
+    }
+
+    if (newSelectedOption) {
+        modelSelectControl.value = newSelectedOption.value;
+        $(modelSelectControl).trigger('change');
+        toastr.success(`Model set to "${newSelectedOption.text}"`);
+    } else {
+        toastr.warning(`No model found with name "${model}"`);
+    }
+}
+
+/**
  * Executes slash commands in the provided text
  * @param {string} text Slash command text
  * @param {boolean} unescape Whether to unescape the batch separator
@@ -1614,8 +1753,7 @@ async function executeSlashCommands(text, unescape = false) {
             unnamedArg = unnamedArg
                 ?.replace(/\\\|/g, '|')
                 ?.replace(/\\\{/g, '{')
-                ?.replace(/\\\}/g, '}')
-                ;
+                ?.replace(/\\\}/g, '}');
         }
 
         for (const [key, value] of Object.entries(result.args)) {
@@ -1623,8 +1761,7 @@ async function executeSlashCommands(text, unescape = false) {
                 result.args[key] = value
                     .replace(/\\\|/g, '|')
                     .replace(/\\\{/g, '{')
-                    .replace(/\\\}/g, '}')
-                    ;
+                    .replace(/\\\}/g, '}');
             }
         }
 
