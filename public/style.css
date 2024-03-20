@@ -460,7 +460,7 @@ body.reduced-motion #bg_custom {
     backdrop-filter: blur(var(--SmartThemeBlurStrength));
     background-color: var(--SmartThemeBlurTintColor);
     -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength));
-    z-index: 3000;
+    z-index: 3005;
 }
 
 #sheld {
@@ -1364,13 +1364,21 @@ input[type="file"] {
     display: none;
     flex-direction: column;
     box-shadow: 0 0 10px var(--black70a);
-    z-index: 3000;
+    z-index: 4000;
     left: 0;
     top: 0;
     margin: 0;
     right: unset;
     width: calc(((100svw - var(--sheldWidth)) / 2) - 1px);
 
+}
+
+#movingDivs > div {
+    z-index: 4000;
+}
+
+#left-nav-panel {
+    z-index: 3000;
 }
 
 .floating_prompt_radio_group,
@@ -1397,7 +1405,8 @@ input[type="file"] {
     line-height: 1.2;
 }
 
-.floating_panel_close {
+.floating_panel_close,
+.floating_panel_maximize {
     height: 15px;
     aspect-ratio: 1 / 1;
     font-size: 20px;
@@ -1405,6 +1414,7 @@ input[type="file"] {
     transition: all 250ms;
 }
 
+.floating_panel_maximize:hover,
 .floating_panel_close:hover {
     cursor: pointer;
     opacity: 1;
@@ -3330,6 +3340,10 @@ a {
     transition: all 250ms;
 }
 
+#ui_language_select {
+    width: 10em;
+}
+
 #extensions_settings .inline-drawer-toggle.inline-drawer-header:hover,
 #extensions_settings2 .inline-drawer-toggle.inline-drawer-header:hover {
     filter: brightness(150%);
@@ -3353,10 +3367,15 @@ a {
     margin: 0 auto;
     height: var(--topBarBlockSize);
     justify-content: center;
-    z-index: 3000;
+    z-index: 3005;
     position: relative;
     width: var(--sheldWidth);
 
+}
+
+body:has(.drawer-content.maximized) #top-settings-holder:has(.drawer-content.openDrawer:not(.fillLeft):not(.fillRight)),
+body:has(.drawer-content.open) #top-settings-holder:has(.drawer-content.openDrawer:not(.fillLeft):not(.fillRight)) {
+    z-index: 4005;
 }
 
 .drawer {
@@ -3404,6 +3423,7 @@ a {
     opacity: 0.8;
 }
 
+.custom-drawer-icon,
 .inline-drawer-icon {
     display: block;
     cursor: pointer;
@@ -3453,7 +3473,18 @@ a {
     margin: 0 auto;
     backdrop-filter: blur(calc(var(--SmartThemeBlurStrength)));
     -webkit-backdrop-filter: blur(calc(var(--SmartThemeBlurStrength)));
-    z-index: 1000 !important;
+    /* z-index: 1000 !important; */
+}
+
+body.movingUI .inline-drawer-maximize {
+    display: none;
+}
+
+body:not(.movingUI) .drawer-content.maximized {
+    width: var(--sheldWidth) !important;
+    top: var(--topBarBlockSize) !important;
+    margin: 0 auto !important;
+    right: 0 !important;
 }
 
 /*to prevent draggables from being made too small to see*/

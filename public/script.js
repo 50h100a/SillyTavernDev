@@ -81,6 +81,7 @@ import {
     switchSimpleMode,
     flushEphemeralStoppingStrings,
     context_presets,
+    resetMovableStyles,
 } from './scripts/power-user.js';
 
 import {
@@ -841,12 +842,12 @@ async function firstLoadInit() {
         throw new Error('Initialization failed');
     }
 
+    await getClientVersion();
+    await getSettings();
     getSystemMessages();
     sendSystemMessage(system_message_types.WELCOME);
     initLocales();
     await readSecretState();
-    await getClientVersion();
-    await getSettings();
     await getUserAvatars(true, user_avatar);
     await getCharacters();
     await getBackgrounds();
@@ -5552,7 +5553,7 @@ function changeMainAPI() {
  * @returns {Promise<string[]>} List of avatar file names
  */
 export async function getUserAvatars(doRender = true, openPageAt = '') {
-    const response = await fetch('/getuseravatars', {
+    const response = await fetch('/api/avatars/get', {
         method: 'POST',
         headers: getRequestHeaders(),
     });
@@ -5699,7 +5700,7 @@ async function uploadUserAvatar(e) {
 
     const formData = new FormData($('#form_upload_avatar').get(0));
     const dataUrl = await getBase64Async(file);
-    let url = '/uploaduseravatar';
+    let url = '/api/avatars/upload';
 
     if (!power_user.never_resize_avatars) {
         $('#dialogue_popup').addClass('large_dialogue_popup wide_dialogue_popup');
@@ -5771,6 +5772,16 @@ async function doOnboarding(avatarId) {
     }
 }
 
+function reloadLoop() {
+    const MAX_RELOADS = 5;
+    let reloads = Number(sessionStorage.getItem('reloads') || 0);
+    if (reloads < MAX_RELOADS) {
+        reloads++;
+        sessionStorage.setItem('reloads', String(reloads));
+        window.location.reload();
+    }
+}
+
 //***************SETTINGS****************//
 ///////////////////////////////////////////
 async function getSettings() {
@@ -5782,7 +5793,8 @@ async function getSettings() {
     });
 
     if (!response.ok) {
-        toastr.error('Settings could not be loaded. Try reloading the page.');
+        reloadLoop();
+        toastr.error('Settings could not be loaded after multiple attempts. Please try again later.');
         throw new Error('Error getting settings');
     }
 
@@ -9789,6 +9801,15 @@ jQuery(async function () {
         $(this).closest('.inline-drawer').find('.inline-drawer-content textarea.autoSetHeight').each(function () {
             resetScrollHeight($(this));
         });
+    });
+
+    $(document).on('click', '.inline-drawer-maximize', function () {
+        const icon = $(this).find('.inline-drawer-icon, .floating_panel_maximize');
+        icon.toggleClass('fa-window-maximize fa-window-restore');
+        const drawerContent = $(this).closest('.drawer-content');
+        drawerContent.toggleClass('maximized');
+        const drawerId = drawerContent.attr('id');
+        resetMovableStyles(drawerId);
     });
 
     $(document).on('click', '.mes .avatar', function () {
