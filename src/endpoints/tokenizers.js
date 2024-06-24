@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { SentencePieceProcessor } = require('@agnai/sentencepiece-js');
-const tiktoken = require('@dqbd/tiktoken');
+const tiktoken = require('tiktoken');
 const { Tokenizer } = require('@agnai/web-tokenizers');
 const { convertClaudePrompt, convertGooglePrompt } = require('../prompt-converters');
 const { readSecret, SECRET_KEYS } = require('./secrets');
@@ -10,12 +10,14 @@ const { TEXTGEN_TYPES } = require('../constants');
 const { jsonParser } = require('../express-common');
 const { setAdditionalHeaders } = require('../additional-headers');
 
+const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
+
 /**
  * @typedef { (req: import('express').Request, res: import('express').Response) => Promise<any> } TokenizationHandler
  */
 
 /**
- * @type {{[key: string]: import("@dqbd/tiktoken").Tiktoken}} Tokenizers cache
+ * @type {{[key: string]: import('tiktoken').Tiktoken}} Tokenizers cache
  */
 const tokenizersCache = {};
 
@@ -262,6 +264,10 @@ function getWebTokenizersChunks(tokenizer, ids) {
  * @returns {string} Tokenizer model to use
  */
 function getTokenizerModel(requestModel) {
+    if (requestModel.includes('gpt-4o')) {
+        return 'gpt-4o';
+    }
+
     if (requestModel.includes('gpt-4-32k')) {
         return 'gpt-4-32k';
     }
@@ -300,6 +306,10 @@ function getTokenizerModel(requestModel) {
 
     if (requestModel.includes('yi')) {
         return 'yi';
+    }
+
+    if (requestModel.includes('gemini')) {
+        return 'gpt-4o';
     }
 
     // default
@@ -551,8 +561,11 @@ router.post('/google/count', jsonParser, async function (req, res) {
         body: JSON.stringify({ contents: convertGooglePrompt(req.body, String(req.query.model)).contents }),
     };
     try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.MAKERSUITE);
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${req.query.model}:countTokens?key=${key}`, options);
+        const reverseProxy = req.query.reverse_proxy?.toString() || '';
+        const proxyPassword = req.query.proxy_password?.toString() || '';
+        const apiKey = reverseProxy ? proxyPassword : readSecret(req.user.directories, SECRET_KEYS.MAKERSUITE);
+        const apiUrl = new URL(reverseProxy || API_MAKERSUITE);
+        const response = await fetch(`${apiUrl.origin}/v1beta/models/${req.query.model}:countTokens?key=${apiKey}`, options);
         const data = await response.json();
         return res.send({ 'token_count': data?.totalTokens || 0 });
     } catch (err) {

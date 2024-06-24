@@ -536,6 +536,15 @@ export function getTokenizerModel() {
         }
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.GROQ) {
+        if (oai_settings.groq_model.includes('llama-3') || oai_settings.groq_model.includes('llama3')) {
+            return llama3Tokenizer;
+        }
+        if (oai_settings.groq_model.includes('mistral') || oai_settings.groq_model.includes('mixtral')) {
+            return mistralTokenizer;
+        }
+    }
+
     // Default to Turbo 3.5
     return turboTokenizer;
 }
@@ -551,7 +560,7 @@ export function countTokensOpenAI(messages, full = false) {
     if (shouldTokenizeAI21) {
         tokenizerEndpoint = '/api/tokenizers/ai21/count';
     } else if (shouldTokenizeGoogle) {
-        tokenizerEndpoint = `/api/tokenizers/google/count?model=${getTokenizerModel()}`;
+        tokenizerEndpoint = `/api/tokenizers/google/count?model=${getTokenizerModel()}&reverse_proxy=${oai_settings.reverse_proxy}&proxy_password=${oai_settings.proxy_password}`;
     } else {
         tokenizerEndpoint = `/api/tokenizers/openai/count?model=${getTokenizerModel()}`;
     }

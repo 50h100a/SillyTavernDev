@@ -41,6 +41,7 @@ const USER_DIRECTORY_TEMPLATE = Object.freeze({
     comfyWorkflows: 'user/workflows',
     files: 'user/files',
     vectors: 'vectors',
+    backups: 'backups',
 });
 
 /**
@@ -192,6 +193,7 @@ const CHAT_COMPLETION_SOURCES = {
     CUSTOM: 'custom',
     COHERE: 'cohere',
     PERPLEXITY: 'perplexity',
+    GROQ: 'groq',
 };
 
 const UPLOADS_PATH = './uploads';
@@ -297,6 +299,7 @@ const OPENROUTER_KEYS = [
     'stream',
     'prompt',
     'stop',
+    'provider',
 ];
 
 // https://github.com/vllm-project/vllm/blob/0f8a91401c89ac0a8018def3756829611b57727f/vllm/entrypoints/openai/protocol.py#L220
