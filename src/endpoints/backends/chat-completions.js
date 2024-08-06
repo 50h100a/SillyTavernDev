@@ -17,6 +17,7 @@ const API_COHERE = 'https://api.cohere.ai/v1';
 const API_PERPLEXITY = 'https://api.perplexity.ai';
 const API_GROQ = 'https://api.groq.com/openai/v1';
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
+const API_01AI = 'https://api.01.ai/v1';
 
 /**
  * Applies a post-processing step to the generated messages.
@@ -270,7 +271,7 @@ async function sendMakerSuiteRequest(request, response) {
     };
 
     function getGeminiBody() {
-        const should_use_system_prompt = ['gemini-1.5-flash-latest', 'gemini-1.5-pro-latest'].includes(model) && request.body.use_makersuite_sysprompt;
+        const should_use_system_prompt = (model.includes('gemini-1.5-flash') || model.includes('gemini-1.5-pro')) && request.body.use_makersuite_sysprompt;
         const prompt = convertGooglePrompt(request.body.messages, model, should_use_system_prompt, request.body.char_name, request.body.user_name);
         let body = {
             contents: prompt.contents,
@@ -482,7 +483,7 @@ async function sendMistralAIRequest(request, response) {
     }
 
     try {
-        const messages = convertMistralMessages(request.body.messages, request.body.model, request.body.char_name, request.body.user_name);
+        const messages = convertMistralMessages(request.body.messages, request.body.char_name, request.body.user_name);
         const controller = new AbortController();
         request.socket.removeAllListeners('close');
         request.socket.on('close', function () {
@@ -669,6 +670,10 @@ router.post('/status', jsonParser, async function (request, response_getstatus_o
     } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.COHERE) {
         api_url = API_COHERE;
         api_key_openai = readSecret(request.user.directories, SECRET_KEYS.COHERE);
+        headers = {};
+    } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ZEROONEAI) {
+        api_url = API_01AI;
+        api_key_openai = readSecret(request.user.directories, SECRET_KEYS.ZEROONEAI);
         headers = {};
     } else {
         console.log('This chat completion source is not supported yet.');
@@ -874,7 +879,7 @@ router.post('/generate', jsonParser, function (request, response) {
 
         if (Array.isArray(request.body.provider) && request.body.provider.length > 0) {
             bodyParams['provider'] = {
-                allow_fallbacks: true,
+                allow_fallbacks: request.body.allow_fallbacks ?? true,
                 order: request.body.provider ?? [],
             };
         }
@@ -931,6 +936,11 @@ router.post('/generate', jsonParser, function (request, response) {
                 request.body.tool_choice = 'none';
             }
         }
+    } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.ZEROONEAI) {
+        apiUrl = API_01AI;
+        apiKey = readSecret(request.user.directories, SECRET_KEYS.ZEROONEAI);
+        headers = {};
+        bodyParams = {};
     } else {
         console.log('This chat completion source is not supported yet.');
         return response.status(400).send({ error: true });

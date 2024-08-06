@@ -1,6 +1,6 @@
 import { ensureImageFormatSupported, getBase64Async, isTrueBoolean, saveBase64AsFile } from '../../utils.js';
 import { getContext, getApiUrl, doExtrasFetch, extension_settings, modules, renderExtensionTemplateAsync } from '../../extensions.js';
-import { callPopup, getRequestHeaders, saveSettingsDebounced, substituteParamsExtended } from '../../../script.js';
+import { appendMediaToMessage, callPopup, eventSource, event_types, getRequestHeaders, saveChatConditional, saveSettingsDebounced, substituteParamsExtended } from '../../../script.js';
 import { getMessageTimeStamp } from '../../RossAscends-mods.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getMultimodalCaption } from '../shared.js';
@@ -8,13 +8,12 @@ import { textgen_types, textgenerationwebui_settings } from '../../textgen-setti
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
-import { SlashCommandEnumValue } from '../../slash-commands/SlashCommandEnumValue.js';
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
 
-const PROMPT_DEFAULT = 'What’s in this image?';
+const PROMPT_DEFAULT = 'What\'s in this image?';
 const TEMPLATE_DEFAULT = '[{{user}} sends {{char}} a picture that contains: {{caption}}]';
 
 /**
@@ -84,12 +83,11 @@ async function setSpinnerIcon() {
 }
 
 /**
- * Sends a captioned message to the chat.
- * @param {string} caption Caption text
- * @param {string} image Image URL
+ * Wraps a caption with a message template.
+ * @param {string} caption Raw caption
+ * @returns {Promise<string>} Wrapped caption
  */
-async function sendCaptionedMessage(caption, image) {
-    const context = getContext();
+async function wrapCaptionTemplate(caption) {
     let template = extension_settings.caption.template || TEMPLATE_DEFAULT;
 
     if (!/{{caption}}/i.test(template)) {
@@ -101,7 +99,7 @@ async function sendCaptionedMessage(caption, image) {
 
     if (extension_settings.caption.refine_mode) {
         messageText = await callPopup(
-            '<h3>Review and edit the generated message:</h3>Press "Cancel" to abort the caption sending.',
+            '<h3>Review and edit the generated caption:</h3>Press "Cancel" to abort the caption sending.',
             'input',
             messageText,
             { rows: 5, okButton: 'Send' });
@@ -111,6 +109,55 @@ async function sendCaptionedMessage(caption, image) {
         }
     }
 
+    return messageText;
+}
+
+/**
+ * Appends caption to an existing message.
+ * @param {Object} data Message data
+ * @returns {Promise<void>}
+ */
+async function captionExistingMessage(data) {
+    if (!(data?.extra?.image)) {
+        return;
+    }
+
+    const imageData = await fetch(data.extra.image);
+    const blob = await imageData.blob();
+    const type = imageData.headers.get('Content-Type');
+    const file = new File([blob], 'image.png', { type });
+    const caption = await getCaptionForFile(file, null, true);
+
+    if (!caption) {
+        console.warn('Failed to generate a caption for the image.');
+        return;
+    }
+
+    const wrappedCaption = await wrapCaptionTemplate(caption);
+
+    const messageText = String(data.mes).trim();
+
+    if (!messageText) {
+        data.extra.inline_image = false;
+        data.mes = wrappedCaption;
+        data.extra.title = wrappedCaption;
+    }
+    else {
+        data.extra.inline_image = true;
+        data.extra.append_title = true;
+        data.extra.title = wrappedCaption;
+    }
+}
+
+/**
+ * Sends a captioned message to the chat.
+ * @param {string} caption Caption text
+ * @param {string} image Image URL
+ */
+async function sendCaptionedMessage(caption, image) {
+    const messageText = await wrapCaptionTemplate(caption);
+
+    const context = getContext();
     const message = {
         name: context.name1,
         is_user: true,
@@ -122,7 +169,11 @@ async function sendCaptionedMessage(caption, image) {
         },
     };
     context.chat.push(message);
+    const messageId = context.chat.length - 1;
+    await eventSource.emit(event_types.MESSAGE_SENT, messageId);
     context.addOneMessage(message);
+    await eventSource.emit(event_types.USER_MESSAGE_RENDERED, messageId);
+    await context.saveChat();
 }
 
 /**
@@ -285,8 +336,9 @@ async function getCaptionForFile(file, prompt, quiet) {
         return caption;
     }
     catch (error) {
-        toastr.error('Failed to caption image.');
-        console.log(error);
+        const errorMessage = error.message || 'Unknown error';
+        toastr.error(errorMessage, 'Failed to caption image.');
+        console.error(error);
         return '';
     }
     finally {
@@ -344,18 +396,20 @@ jQuery(async function () {
             Generate Caption
         </div>`);
 
-        $('#extensionsMenu').prepend(sendButton);
+        $('#caption_wand_container').append(sendButton);
         $(sendButton).on('click', () => {
             const hasCaptionModule =
                 (modules.includes('caption') && extension_settings.caption.source === 'extras') ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'openai' && (secret_state[SECRET_KEYS.OPENAI] || extension_settings.caption.allow_reverse_proxy)) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'openrouter' && secret_state[SECRET_KEYS.OPENROUTER]) ||
+                (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'zerooneai' && secret_state[SECRET_KEYS.ZEROONEAI]) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'google' && (secret_state[SECRET_KEYS.MAKERSUITE] || extension_settings.caption.allow_reverse_proxy)) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'anthropic' && (secret_state[SECRET_KEYS.CLAUDE] || extension_settings.caption.allow_reverse_proxy)) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'ollama' && textgenerationwebui_settings.server_urls[textgen_types.OLLAMA]) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'llamacpp' && textgenerationwebui_settings.server_urls[textgen_types.LLAMACPP]) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'ooba' && textgenerationwebui_settings.server_urls[textgen_types.OOBA]) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'koboldcpp' && textgenerationwebui_settings.server_urls[textgen_types.KOBOLDCPP]) ||
+                (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'vllm' && textgenerationwebui_settings.server_urls[textgen_types.VLLM]) ||
                 (extension_settings.caption.source === 'multimodal' && extension_settings.caption.multimodal_api === 'custom') ||
                 extension_settings.caption.source === 'local' ||
                 extension_settings.caption.source === 'horde';
@@ -408,8 +462,8 @@ jQuery(async function () {
         });
     }
     async function addSettings() {
-        const html = await renderExtensionTemplateAsync('caption', 'settings');
-        $('#extensions_settings2').append(html);
+        const html = await renderExtensionTemplateAsync('caption', 'settings', { TEMPLATE_DEFAULT, PROMPT_DEFAULT });
+        $('#caption_container').append(html);
     }
 
     await addSettings();
@@ -422,6 +476,7 @@ jQuery(async function () {
     $('#caption_refine_mode').prop('checked', !!(extension_settings.caption.refine_mode));
     $('#caption_allow_reverse_proxy').prop('checked', !!(extension_settings.caption.allow_reverse_proxy));
     $('#caption_prompt_ask').prop('checked', !!(extension_settings.caption.prompt_ask));
+    $('#caption_auto_mode').prop('checked', !!(extension_settings.caption.auto_mode));
     $('#caption_source').val(extension_settings.caption.source);
     $('#caption_prompt').val(extension_settings.caption.prompt);
     $('#caption_template').val(extension_settings.caption.template);
@@ -446,6 +501,41 @@ jQuery(async function () {
     $('#caption_prompt_ask').on('input', () => {
         extension_settings.caption.prompt_ask = $('#caption_prompt_ask').prop('checked');
         saveSettingsDebounced();
+    });
+    $('#caption_auto_mode').on('input', () => {
+        extension_settings.caption.auto_mode = !!$('#caption_auto_mode').prop('checked');
+        saveSettingsDebounced();
+    });
+
+    const onMessageEvent = async (index) => {
+        if (!extension_settings.caption.auto_mode) {
+            return;
+        }
+
+        const data = getContext().chat[index];
+        await captionExistingMessage(data);
+    };
+
+    eventSource.on(event_types.MESSAGE_SENT, onMessageEvent);
+    eventSource.on(event_types.MESSAGE_FILE_EMBEDDED, onMessageEvent);
+
+    $(document).on('click', '.mes_img_caption', async function () {
+        const animationClass = 'fa-fade';
+        const messageBlock = $(this).closest('.mes');
+        const messageImg = messageBlock.find('.mes_img');
+        if (messageImg.hasClass(animationClass)) return;
+        messageImg.addClass(animationClass);
+        try {
+            const index = Number(messageBlock.attr('mesid'));
+            const data = getContext().chat[index];
+            await captionExistingMessage(data);
+            appendMediaToMessage(data, messageBlock, false);
+            await saveChatConditional();
+        } catch(e) {
+            console.error('Message image recaption failed', e);
+        } finally {
+            messageImg.removeClass(animationClass);
+        }
     });
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'caption',
@@ -482,4 +572,6 @@ jQuery(async function () {
             </div>
         `,
     }));
+
+    document.body.classList.add('caption');
 });

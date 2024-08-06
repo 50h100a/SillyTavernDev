@@ -2,7 +2,6 @@ import {
     saveSettingsDebounced,
     scrollChatToBottom,
     characters,
-    callPopup,
     reloadMarkdownProcessor,
     reloadCurrentChat,
     getRequestHeaders,
@@ -23,6 +22,7 @@ import {
     setActiveGroup,
     setActiveCharacter,
     entitiesFilter,
+    doNewChat,
 } from '../script.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
@@ -40,14 +40,15 @@ import { tokenizers } from './tokenizers.js';
 import { BIAS_CACHE } from './logit-bias.js';
 import { renderTemplateAsync } from './templates.js';
 
-import { countOccurrences, debounce, delay, download, getFileText, isOdd, onlyUnique, resetScrollHeight, shuffle, sortMoments, stringToRange, timestampToMoment } from './utils.js';
+import { countOccurrences, debounce, delay, download, getFileText, getStringHash, isOdd, isTrueBoolean, onlyUnique, resetScrollHeight, shuffle, sortMoments, stringToRange, timestampToMoment } from './utils.js';
 import { FILTER_TYPES } from './filters.js';
 import { PARSER_FLAG, SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
-import { ARGUMENT_TYPE, SlashCommandArgument } from './slash-commands/SlashCommandArgument.js';
-import { AUTOCOMPLETE_WIDTH } from './autocomplete/AutoComplete.js';
+import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
+import { AUTOCOMPLETE_SELECT_KEY, AUTOCOMPLETE_WIDTH } from './autocomplete/AutoComplete.js';
 import { SlashCommandEnumValue, enumTypes } from './slash-commands/SlashCommandEnumValue.js';
 import { commonEnumProviders, enumIcons } from './slash-commands/SlashCommandCommonEnumsProvider.js';
+import { POPUP_TYPE, callGenericPopup } from './popup.js';
 
 export {
     loadPowerUserSettings,
@@ -178,6 +179,7 @@ let power_user = {
     send_on_enter: send_on_enter_options.AUTO,
     console_log_prompts: false,
     request_token_probabilities: false,
+    show_group_chat_queue: false,
     render_formulas: false,
     allow_name1_display: false,
     allow_name2_display: false,
@@ -195,6 +197,7 @@ let power_user = {
     prefer_character_prompt: true,
     prefer_character_jailbreak: true,
     quick_continue: false,
+    quick_impersonate: false,
     continue_on_send: false,
     trim_spaces: true,
     relaxed_api_urls: false,
@@ -240,6 +243,7 @@ let power_user = {
         example_separator: defaultExampleSeparator,
         use_stop_strings: true,
         allow_jailbreak: false,
+        names_as_stop_strings: true,
     },
 
     personas: {},
@@ -274,6 +278,7 @@ let power_user = {
                 left: AUTOCOMPLETE_WIDTH.CHAT,
                 right: AUTOCOMPLETE_WIDTH.CHAT,
             },
+            select: AUTOCOMPLETE_SELECT_KEY.TAB + AUTOCOMPLETE_SELECT_KEY.ENTER,
         },
         parser: {
             /**@type {Object.<PARSER_FLAG,boolean>} */
@@ -334,6 +339,8 @@ const storage_keys = {
     compact_input_area: 'compact_input_area',
     auto_connect_legacy: 'AutoConnectEnabled',
     auto_load_chat_legacy: 'AutoLoadChatEnabled',
+
+    storyStringValidationCache: 'StoryStringValidationCache',
 };
 
 const contextControls = [
@@ -343,6 +350,7 @@ const contextControls = [
     { id: 'context_chat_start', property: 'chat_start', isCheckbox: false, isGlobalSetting: false },
     { id: 'context_use_stop_strings', property: 'use_stop_strings', isCheckbox: true, isGlobalSetting: false, defaultValue: false },
     { id: 'context_allow_jailbreak', property: 'allow_jailbreak', isCheckbox: true, isGlobalSetting: false, defaultValue: false },
+    { id: 'context_names_as_stop_strings', property: 'names_as_stop_strings', isCheckbox: true, isGlobalSetting: false, defaultValue: true },
 
     // Existing power user settings
     { id: 'always-force-name2-checkbox', property: 'always_force_name2', isCheckbox: true, isGlobalSetting: true, defaultValue: true },
@@ -1022,6 +1030,12 @@ function switchMovingUI() {
         if (power_user.movingUIState) {
             loadMovingUIState();
         }
+    } else {
+        if (Object.keys(power_user.movingUIState).length !== 0) {
+            power_user.movingUIState = {};
+            resetMovablePanels();
+            saveSettingsDebounced();
+        }
     }
 }
 
@@ -1060,19 +1074,19 @@ function applyChatDisplay() {
 
     switch (power_user.chat_display) {
         case 0: {
-            console.log('applying default chat');
+            console.debug('applying default chat');
             $('body').removeClass('bubblechat');
             $('body').removeClass('documentstyle');
             break;
         }
         case 1: {
-            console.log('applying bubblechat');
+            console.debug('applying bubblechat');
             $('body').addClass('bubblechat');
             $('body').removeClass('documentstyle');
             break;
         }
         case 2: {
-            console.log('applying document style');
+            console.debug('applying document style');
             $('body').removeClass('bubblechat');
             $('body').addClass('documentstyle');
             break;
@@ -1432,7 +1446,7 @@ export function registerDebugFunction(functionId, name, description, func) {
 
 async function showDebugMenu() {
     const template = await renderTemplateAsync('debug', { functions: debug_functions });
-    callPopup(template, 'text', '', { wide: true, large: true });
+    callGenericPopup(template, POPUP_TYPE.TEXT, '', { wide: true, large: true, allowVerticalScrolling: true });
 }
 
 switchUiMode();
@@ -1466,7 +1480,7 @@ function getExampleMessagesBehavior() {
     return 'normal';
 }
 
-function loadPowerUserSettings(settings, data) {
+async function loadPowerUserSettings(settings, data) {
     const defaultStscript = JSON.parse(JSON.stringify(power_user.stscript));
     // Load from settings.json
     if (settings.power_user !== undefined) {
@@ -1485,12 +1499,21 @@ function loadPowerUserSettings(settings, data) {
             if (power_user.stscript.autocomplete.font === undefined) {
                 power_user.stscript.autocomplete.font = defaultStscript.autocomplete.font;
             }
+            if (power_user.stscript.autocomplete.style === undefined) {
+                power_user.stscript.autocomplete.style = power_user.stscript.autocomplete_style || defaultStscript.autocomplete.style;
+            }
+            if (power_user.stscript.autocomplete.select === undefined) {
+                power_user.stscript.autocomplete.select = defaultStscript.autocomplete.select;
+            }
         }
         if (power_user.stscript.parser === undefined) {
             power_user.stscript.parser = defaultStscript.parser;
         } else if (power_user.stscript.parser.flags === undefined) {
             power_user.stscript.parser.flags = defaultStscript.parser.flags;
         }
+
+        // Cleanup old flags
+        delete power_user.stscript.autocomplete_style;
     }
 
     if (data.themes !== undefined) {
@@ -1576,7 +1599,9 @@ function loadPowerUserSettings(settings, data) {
     $('#trim_spaces').prop('checked', power_user.trim_spaces);
     $('#continue_on_send').prop('checked', power_user.continue_on_send);
     $('#quick_continue').prop('checked', power_user.quick_continue);
+    $('#quick_impersonate').prop('checked', power_user.quick_continue);
     $('#mes_continue').css('display', power_user.quick_continue ? '' : 'none');
+    $('#mes_impersonate').css('display', power_user.quick_impersonate ? '' : 'none');
     $('#gestures-checkbox').prop('checked', power_user.gestures);
     $('#auto_swipe').prop('checked', power_user.auto_swipe);
     $('#auto_swipe_minimum_length').val(power_user.auto_swipe_minimum_length);
@@ -1592,6 +1617,7 @@ function loadPowerUserSettings(settings, data) {
 
     $('#console_log_prompts').prop('checked', power_user.console_log_prompts);
     $('#request_token_probabilities').prop('checked', power_user.request_token_probabilities);
+    $('#show_group_chat_queue').prop('checked', power_user.show_group_chat_queue);
     $('#auto_fix_generated_markdown').prop('checked', power_user.auto_fix_generated_markdown);
     $('#auto_scroll_chat_to_bottom').prop('checked', power_user.auto_scroll_chat_to_bottom);
     $('#bogus_folders').prop('checked', power_user.bogus_folders);
@@ -1643,8 +1669,9 @@ function loadPowerUserSettings(settings, data) {
 
     $('#stscript_autocomplete_autoHide').prop('checked', power_user.stscript.autocomplete.autoHide ?? false).trigger('input');
     $('#stscript_matching').val(power_user.stscript.matching ?? 'fuzzy');
-    $('#stscript_autocomplete_style').val(power_user.stscript.autocomplete_style ?? 'theme');
-    document.body.setAttribute('data-stscript-style', power_user.stscript.autocomplete_style);
+    $('#stscript_autocomplete_style').val(power_user.stscript.autocomplete.style ?? 'theme');
+    document.body.setAttribute('data-stscript-style', power_user.stscript.autocomplete.style);
+    $('#stscript_autocomplete_select').val(power_user.stscript.autocomplete.select ?? (AUTOCOMPLETE_SELECT_KEY.TAB + AUTOCOMPLETE_SELECT_KEY.ENTER));
     $('#stscript_parser_flag_strict_escaping').prop('checked', power_user.stscript.parser.flags[PARSER_FLAG.STRICT_ESCAPING] ?? false);
     $('#stscript_parser_flag_replace_getvar').prop('checked', power_user.stscript.parser.flags[PARSER_FLAG.REPLACE_GETVAR] ?? false);
     $('#stscript_autocomplete_font_scale').val(power_user.stscript.autocomplete.font.scale ?? defaultStscript.autocomplete.font.scale);
@@ -1713,7 +1740,7 @@ function loadPowerUserSettings(settings, data) {
     switchCompactInputArea();
     reloadMarkdownProcessor(power_user.render_formulas);
     loadInstructMode(data);
-    loadContextSettings();
+    await loadContextSettings();
     loadMaxContextUnlocked();
     switchWaifuMode();
     switchSpoilerMode();
@@ -1845,7 +1872,7 @@ function getContextSettings() {
 
 // TODO: Maybe add a refresh button to reset settings to preset
 // TODO: Add "global state" if a preset doesn't set the power_user checkboxes
-function loadContextSettings() {
+async function loadContextSettings() {
     contextControls.forEach(control => {
         const $element = $(`#${control.id}`);
 
@@ -1865,7 +1892,7 @@ function loadContextSettings() {
 
         // If the setting already exists, no need to duplicate it
         // TODO: Maybe check the power_user object for the setting instead of a flag?
-        $element.on('input', function () {
+        $element.on('input', async function () {
             const value = control.isCheckbox ? !!$(this).prop('checked') : $(this).val();
             if (control.isGlobalSetting) {
                 power_user[control.property] = value;
@@ -1875,7 +1902,7 @@ function loadContextSettings() {
 
             saveSettingsDebounced();
             if (!control.isCheckbox) {
-                resetScrollHeight($element);
+                await resetScrollHeight($element);
             }
         });
     });
@@ -2098,6 +2125,9 @@ export function fuzzySearchGroups(searchValue) {
  */
 export function renderStoryString(params) {
     try {
+        // Validate and log possible warnings/errors
+        validateStoryString(power_user.context.story_string, params);
+
         // compile the story string template into a function, with no HTML escaping
         const compiledTemplate = Handlebars.compile(power_user.context.story_string, { noEscape: true });
 
@@ -2124,6 +2154,55 @@ export function renderStoryString(params) {
         throw e; // rethrow the error
     }
 }
+
+/**
+ * Validate the story string for possible warnings or issues
+ *
+ * @param {string} storyString - The story string
+ * @param {Object} params - The story string parameters
+ */
+function validateStoryString(storyString, params) {
+    /** @type {{hashCache: {[hash: string]: {fieldsWarned: {[key: string]: boolean}}}}} */
+    const cache = JSON.parse(localStorage.getItem(storage_keys.storyStringValidationCache)) ?? { hashCache: {} };
+
+    const hash = getStringHash(storyString);
+
+    // Initialize the cache for the current hash if it doesn't exist
+    if (!cache.hashCache[hash]) {
+        cache.hashCache[hash] = { fieldsWarned: {} };
+    }
+
+    const currentCache = cache.hashCache[hash];
+    const fieldsToWarn = [];
+
+    function validateMissingField(field, fallbackLegacyField = null) {
+        const contains = storyString.includes(`{{${field}}}`) || (!!fallbackLegacyField && storyString.includes(`{{${fallbackLegacyField}}}`));
+        if (!contains && params[field]) {
+            const wasLogged = currentCache.fieldsWarned[field];
+            if (!wasLogged) {
+                fieldsToWarn.push(field);
+                currentCache.fieldsWarned[field] = true;
+            }
+            console.warn(`The story string does not contain {{${field}}}, but it would contain content:\n`, params[field]);
+        }
+    }
+
+    validateMissingField('description');
+    validateMissingField('personality');
+    validateMissingField('persona');
+    validateMissingField('scenario');
+    // validateMissingField('system');
+    validateMissingField('wiBefore', 'loreBefore');
+    validateMissingField('wiAfter', 'loreAfter');
+
+    if (fieldsToWarn.length > 0) {
+        const fieldsList = fieldsToWarn.map(field => `{{${field}}}`).join(', ');
+        toastr.warning(`The story string does not contain the following fields, but they would contain content: ${fieldsList}`, 'Story String Validation');
+    }
+
+    localStorage.setItem(storage_keys.storyStringValidationCache, JSON.stringify(cache));
+}
+
 
 const sortFunc = (a, b) => power_user.sort_order == 'asc' ? compareFunc(a, b) : compareFunc(b, a);
 const compareFunc = (first, second) => {
@@ -2201,7 +2280,8 @@ async function deleteTheme() {
         return;
     }
 
-    const confirm = await callPopup(`Are you sure you want to delete the theme "${themeName}"?`, 'confirm', '', { okButton: 'Yes' });
+    const template = $(await renderTemplateAsync('themeDelete', { themeName }));
+    const confirm = await callGenericPopup(template, POPUP_TYPE.CONFIRM);
 
     if (!confirm) {
         return;
@@ -2263,7 +2343,8 @@ async function importTheme(file) {
     }
 
     if (typeof parsed.custom_css === 'string' && parsed.custom_css.includes('@import')) {
-        const confirm = await callPopup('This theme contains @import lines in the Custom CSS. Press "Yes" to proceed.', 'confirm', '', { okButton: 'Yes' });
+        const template = $(await renderTemplateAsync('themeImportWarning'));
+        const confirm = await callGenericPopup(template, POPUP_TYPE.CONFIRM);
         if (!confirm) {
             throw new Error('Theme contains @import lines');
         }
@@ -2288,11 +2369,13 @@ async function importTheme(file) {
  */
 async function saveTheme(name = undefined, theme = undefined) {
     if (typeof name !== 'string') {
-        name = await callPopup('Enter a theme preset name:', 'input', power_user.theme);
+        const newName = await callGenericPopup('Enter a theme preset name:', POPUP_TYPE.INPUT, power_user.theme);
 
-        if (!name) {
+        if (!newName) {
             return;
         }
+
+        name = String(newName);
     }
 
     if (typeof theme !== 'object') {
@@ -2305,25 +2388,29 @@ async function saveTheme(name = undefined, theme = undefined) {
         body: JSON.stringify(theme),
     });
 
-    if (response.ok) {
-        const themeIndex = themes.findIndex(x => x.name == name);
-
-        if (themeIndex == -1) {
-            themes.push(theme);
-            const option = document.createElement('option');
-            option.selected = true;
-            option.value = name;
-            option.innerText = name;
-            $('#themes').append(option);
-        }
-        else {
-            themes[themeIndex] = theme;
-            $(`#themes option[value="${name}"]`).attr('selected', true);
-        }
-
-        power_user.theme = name;
-        saveSettingsDebounced();
+    if (!response.ok) {
+        toastr.error('Check the server connection and reload the page to prevent data loss.', 'Theme could not be saved');
+        console.error('Theme could not be saved', response);
+        throw new Error('Theme could not be saved');
     }
+
+    const themeIndex = themes.findIndex(x => x.name == name);
+
+    if (themeIndex == -1) {
+        themes.push(theme);
+        const option = document.createElement('option');
+        option.selected = true;
+        option.value = name;
+        option.innerText = name;
+        $('#themes').append(option);
+    }
+    else {
+        themes[themeIndex] = theme;
+        $(`#themes option[value="${name}"]`).attr('selected', true);
+    }
+
+    power_user.theme = name;
+    saveSettingsDebounced();
 
     return theme;
 }
@@ -2390,11 +2477,13 @@ function getNewTheme(parsed) {
 }
 
 async function saveMovingUI() {
-    const name = await callPopup('Enter a name for the MovingUI Preset:', 'input');
+    const popupResult = await callGenericPopup('Enter a name for the MovingUI Preset:', POPUP_TYPE.INPUT);
 
-    if (!name) {
+    if (!popupResult) {
         return;
     }
+
+    const name = String(popupResult);
 
     const movingUIPreset = {
         name,
@@ -2427,7 +2516,8 @@ async function saveMovingUI() {
         power_user.movingUIPreset = name;
         saveSettingsDebounced();
     } else {
-        toastr.warning('failed to save MovingUI state.');
+        toastr.error('Failed to save MovingUI state.');
+        console.error('MovingUI could not be saved', response);
     }
 }
 
@@ -2518,14 +2608,6 @@ async function resetMovablePanels(type) {
             toastr.success('Panel positions reset');
         }
     });
-}
-
-async function doNewChat() {
-    $('#option_start_new_chat').trigger('click');
-    await delay(1);
-    $('#dialogue_popup_ok').trigger('click');
-    await delay(1);
-    return '';
 }
 
 /**
@@ -2668,45 +2750,26 @@ async function doDelMode(_, text) {
         return '';
     }
 
-    //first enter delmode
-    $('#option_delete_mes').trigger('click', { fromSlashCommand: true });
-
-    //parse valid args
-    if (text) {
-        await delay(300); //same as above, need event signal for 'entered del mode'
-        console.debug('parsing msgs to del');
-        let numMesToDel = Number(text);
-        let lastMesID = Number($('#chat .mes').last().attr('mesid'));
-        let oldestMesIDToDel = lastMesID - numMesToDel + 1;
-
-        if (oldestMesIDToDel < 0) {
-            toastr.warning(`Cannot delete more than ${chat.length} messages.`);
-            return '';
-        }
-
-        let oldestMesToDel = $('#chat').find(`.mes[mesid=${oldestMesIDToDel}]`);
-
-        if (!oldestMesIDToDel && lastMesID > 0) {
-            oldestMesToDel = await loadUntilMesId(oldestMesIDToDel);
-
-            if (!oldestMesToDel || !oldestMesToDel.length) {
-                return '';
-            }
-        }
-
-        let oldestDelMesCheckbox = $(oldestMesToDel).find('.del_checkbox');
-        let newLastMesID = oldestMesIDToDel - 1;
-        console.debug(`DelMesReport -- numMesToDel:  ${numMesToDel}, lastMesID: ${lastMesID}, oldestMesIDToDel:${oldestMesIDToDel}, newLastMesID: ${newLastMesID}`);
-        oldestDelMesCheckbox.trigger('click');
-        let trueNumberOfDeletedMessage = lastMesID - oldestMesIDToDel + 1;
-
-        //await delay(1)
-        $('#dialogue_del_mes_ok').trigger('click');
-        toastr.success(`Deleted ${trueNumberOfDeletedMessage} messages.`);
+    // Just enter the delete mode.
+    if (!text) {
+        $('#option_delete_mes').trigger('click', { fromSlashCommand: true });
         return '';
     }
 
-    return '';
+    const count = Number(text);
+
+    // Nothing to delete.
+    if (count < 1) {
+        return '';
+    }
+
+    if (count > chat.length) {
+        toastr.warning(`Cannot delete more than ${chat.length} messages.`);
+        return '';
+    }
+
+    const range = `${chat.length - count}-${chat.length - 1}`;
+    return doMesCut(_, range);
 }
 
 function doResetPanels() {
@@ -2921,7 +2984,13 @@ function setAvgBG() {
     return '';
 }
 
-async function setThemeCallback(_, text) {
+async function setThemeCallback(_, themeName) {
+    if (!themeName) {
+        // allow reporting of the theme name if called without args
+        // for use in ST Scripts via pipe
+        return power_user.theme;
+    }
+
     // @ts-ignore
     const fuse = new Fuse(themes, {
         keys: [
@@ -2929,12 +2998,12 @@ async function setThemeCallback(_, text) {
         ],
     });
 
-    const results = fuse.search(text);
-    console.debug('Theme fuzzy search results for ' + text, results);
+    const results = fuse.search(themeName);
+    console.debug('Theme fuzzy search results for ' + themeName, results);
     const theme = results[0]?.item;
 
     if (!theme) {
-        toastr.warning(`Could not find theme with name: ${text}`);
+        toastr.warning(`Could not find theme with name: ${themeName}`);
         return;
     }
 
@@ -3064,6 +3133,7 @@ $(document).ready(() => {
         const winHeight = window.innerHeight;
         const originalWidth = winWidth * zoomLevel;
         const originalHeight = winHeight * zoomLevel;
+        console.log(`Window resize: ${coreTruthWinWidth}x${coreTruthWinHeight} -> ${window.innerWidth}x${window.innerHeight}`);
         console.debug(`Zoom: ${zoomLevel}, X:${winWidth}, Y:${winHeight}, original: ${originalWidth}x${originalHeight} `);
         return zoomLevel;
     });
@@ -3072,7 +3142,6 @@ $(document).ready(() => {
     var coreTruthWinHeight = window.innerHeight;
 
     $(window).on('resize', async () => {
-        console.log(`Window resize: ${coreTruthWinWidth}x${coreTruthWinHeight} -> ${window.innerWidth}x${window.innerHeight}`);
         adjustAutocompleteDebounced();
         setHotswapsDebounced();
 
@@ -3125,7 +3194,7 @@ $(document).ready(() => {
                 }
             }
         } else {
-            console.log('aborting MUI reset', Object.keys(power_user.movingUIState).length);
+            console.debug('aborting MUI reset', Object.keys(power_user.movingUIState).length);
         }
         saveSettingsDebounced();
         coreTruthWinWidth = window.innerWidth;
@@ -3281,10 +3350,11 @@ $(document).ready(() => {
 
     });
 
-    $('#chat_width_slider').on('input', function (e) {
+    $('#chat_width_slider').on('input', function (e, data) {
+        const applyMode = data?.forced ? 'forced' : 'normal';
         power_user.chat_width = Number(e.target.value);
         localStorage.setItem(storage_keys.chat_width, power_user.chat_width);
-        applyChatWidth();
+        applyChatWidth(applyMode);
         setHotswapsDebounced();
     });
 
@@ -3310,11 +3380,12 @@ $(document).ready(() => {
         saveSettingsDebounced();
     });
 
-    $('input[name="font_scale"]').on('input', async function (e) {
+    $('input[name="font_scale"]').on('input', async function (e, data) {
+        const applyMode = data?.forced ? 'forced' : 'normal';
         power_user.font_scale = Number(e.target.value);
         $('#font_scale_counter').val(power_user.font_scale);
         localStorage.setItem(storage_keys.font_scale, power_user.font_scale);
-        await applyFontScale();
+        await applyFontScale(applyMode);
         saveSettingsDebounced();
     });
 
@@ -3503,6 +3574,11 @@ $(document).ready(() => {
         saveSettingsDebounced();
     });
 
+    $('#show_group_chat_queue').on('input', function () {
+        power_user.show_group_chat_queue = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
     $('#auto_scroll_chat_to_bottom').on('input', function () {
         power_user.auto_scroll_chat_to_bottom = !!$(this).prop('checked');
         saveSettingsDebounced();
@@ -3672,6 +3748,13 @@ $(document).ready(() => {
         saveSettingsDebounced();
     });
 
+    $('#quick_impersonate').on('input', function () {
+        const value = !!$(this).prop('checked');
+        power_user.quick_impersonate = value;
+        $('#mes_impersonate').css('display', value ? '' : 'none');
+        saveSettingsDebounced();
+    });
+
     $('#trim_spaces').on('input', function () {
         const value = !!$(this).prop('checked');
         power_user.trim_spaces = value;
@@ -3781,8 +3864,14 @@ $(document).ready(() => {
 
     $('#stscript_autocomplete_style').on('change', function () {
         const value = $(this).find(':selected').val();
-        power_user.stscript.autocomplete_style = String(value);
-        document.body.setAttribute('data-stscript-style', power_user.stscript.autocomplete_style);
+        power_user.stscript.autocomplete.style = String(value);
+        document.body.setAttribute('data-stscript-style', power_user.stscript.autocomplete.style);
+        saveSettingsDebounced();
+    });
+
+    $('#stscript_autocomplete_select').on('change', function () {
+        const value = $(this).find(':selected').val();
+        power_user.stscript.autocomplete.select = parseInt(String(value));
         saveSettingsDebounced();
     });
 
@@ -3916,7 +4005,20 @@ $(document).ready(() => {
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'newchat',
-        callback: doNewChat,
+        /** @type {(args: { delete: string?}, string) => Promise<''>} */
+        callback: async (args, _) => {
+            await doNewChat({ deleteCurrentChat: isTrueBoolean(args.delete) });
+            return '';
+        },
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'delete',
+                description: 'delete the current chat',
+                typeList: [ARGUMENT_TYPE.BOOLEAN],
+                defaultValue: 'false',
+                enumList: commonEnumProviders.boolean('trueFalse')(),
+            }),
+        ],
         helpString: 'Start a new chat with the current character',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
@@ -3941,6 +4043,7 @@ $(document).ready(() => {
             ),
         ],
         helpString: 'Enter message deletion mode, and auto-deletes last N messages if numeric argument is provided.',
+        returns: 'The text of the deleted messages.',
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'cut',
@@ -3989,13 +4092,30 @@ $(document).ready(() => {
         callback: setThemeCallback,
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
-                description: 'name',
+                description: 'theme name',
                 typeList: [ARGUMENT_TYPE.STRING],
-                isRequired: true,
                 enumProvider: () => themes.map(theme => new SlashCommandEnumValue(theme.name)),
             }),
         ],
-        helpString: 'sets a UI theme by name',
+        helpString: `
+        <div>
+            Sets a UI theme by name.
+        </div>
+        <div>
+            If no theme name is is provided, this will return the currently active theme.
+        </div>
+        <div>
+            <strong>Example:</strong>
+            <ul>
+                <li>
+                    <pre><code>/theme Cappuccino</code></pre>
+                </li>
+                <li>
+                    <pre><code>/theme</code></pre>
+                </li>
+            </ul>
+        </div>
+    `,
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'movingui',

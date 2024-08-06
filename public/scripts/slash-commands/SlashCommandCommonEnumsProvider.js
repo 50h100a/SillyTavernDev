@@ -1,11 +1,12 @@
-import { chat_metadata, characters, substituteParams, chat, extension_prompt_roles, extension_prompt_types } from "../../script.js";
-import { extension_settings } from "../extensions.js";
-import { getGroupMembers, groups, selected_group } from "../group-chats.js";
-import { power_user } from "../power-user.js";
-import { searchCharByName, getTagsList, tags } from "../tags.js";
-import { SlashCommandClosure } from "./SlashCommandClosure.js";
-import { SlashCommandEnumValue, enumTypes } from "./SlashCommandEnumValue.js";
-import { SlashCommandExecutor } from "./SlashCommandExecutor.js";
+import { chat_metadata, characters, substituteParams, chat, extension_prompt_roles, extension_prompt_types } from '../../script.js';
+import { extension_settings } from '../extensions.js';
+import { getGroupMembers, groups } from '../group-chats.js';
+import { power_user } from '../power-user.js';
+import { searchCharByName, getTagsList, tags } from '../tags.js';
+import { world_names } from '../world-info.js';
+import { SlashCommandClosure } from './SlashCommandClosure.js';
+import { SlashCommandEnumValue, enumTypes } from './SlashCommandEnumValue.js';
+import { SlashCommandScope } from "./SlashCommandScope.js";
 
 /**
  * A collection of regularly used enum icons
@@ -103,8 +104,8 @@ export const enumIcons = {
         // Remove possible nullable types definition to match type icon
         type = type.replace(/\?$/, '');
         return enumIcons[type] ?? enumIcons.default;
-    }
-}
+    },
+};
 
 /**
  * A collection of common enum providers
@@ -134,16 +135,16 @@ export const commonEnumProviders = {
      * Can be filtered by `type` to only show global or local variables
      *
      * @param {...('global'|'local'|'scope'|'all')} type - The type of variables to include in the array. Can be 'all', 'global', or 'local'.
-     * @returns {() => SlashCommandEnumValue[]}
+     * @returns {(executor:SlashCommandExecutor, scope:SlashCommandScope) => SlashCommandEnumValue[]}
      */
-    variables: (...type) => () => {
+    variables: (...type) => (executor, scope) => {
         const types = type.flat();
         const isAll = types.includes('all');
         return [
-            ...isAll || types.includes('global') ? Object.keys(extension_settings.variables.global ?? []).map(name => new SlashCommandEnumValue(name, null, enumTypes.macro, enumIcons.globalVariable)) : [],
+            ...isAll || types.includes('scope') ? scope.allVariableNames.map(name => new SlashCommandEnumValue(name, null, enumTypes.variable, enumIcons.scopeVariable)) : [],
             ...isAll || types.includes('local') ? Object.keys(chat_metadata.variables ?? []).map(name => new SlashCommandEnumValue(name, null, enumTypes.name, enumIcons.localVariable)) : [],
-            ...isAll || types.includes('scope') ? [].map(name => new SlashCommandEnumValue(name, null, enumTypes.variable, enumIcons.scopeVariable)) : [], // TODO: Add scoped variables here, Lenny
-        ]
+            ...isAll || types.includes('global') ? Object.keys(extension_settings.variables.global ?? []).map(name => new SlashCommandEnumValue(name, null, enumTypes.macro, enumIcons.globalVariable)) : [],
+        ].filter((item, idx, list)=>idx == list.findIndex(it=>it.value == item.value));
     },
 
     /**
@@ -180,7 +181,7 @@ export const commonEnumProviders = {
      * @param {('all' | 'existing' | 'not-existing')?} [mode='all'] - Which types of tags to show
      * @returns {() => SlashCommandEnumValue[]}
      */
-    tagsForChar: (mode = 'all') => (/** @type {SlashCommandExecutor} */ executor) => {
+    tagsForChar: (mode = 'all') => (/** @type {import('./SlashCommandExecutor.js').SlashCommandExecutor} */ executor) => {
         // Try to see if we can find the char during execution to filter down the tags list some more. Otherwise take all tags.
         const charName = executor.namedArgumentList.find(it => it.name == 'name')?.value;
         if (charName instanceof SlashCommandClosure) throw new Error('Argument \'name\' does not support closures');
@@ -213,7 +214,7 @@ export const commonEnumProviders = {
      *
      * @returns {SlashCommandEnumValue[]}
      */
-    worlds: () => $('#world_info').children().toArray().map(x => new SlashCommandEnumValue(x.textContent, null, enumTypes.name, enumIcons.world)),
+    worlds: () => world_names.map(worldName => new SlashCommandEnumValue(worldName, null, enumTypes.name, enumIcons.world)),
 
     /**
      * All existing injects for the current chat
