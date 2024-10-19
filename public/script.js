@@ -1,4 +1,4 @@
-import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods, shouldSendOnEnter, addSafariPatch } from './scripts/RossAscends-mods.js';
+import { humanizedDateTime, favsToHotswap, getMessageTimeStamp, dragElement, isMobile, initRossMods, shouldSendOnEnter } from './scripts/RossAscends-mods.js';
 import { userStatsHandler, statMesProcess, initStats } from './scripts/stats.js';
 import {
     generateKoboldWithStreaming,
@@ -83,6 +83,7 @@ import {
     resetMovableStyles,
     forceCharacterEditorTokenize,
     applyPowerUserSettings,
+    switchSwipeNumAllMessages,
 } from './scripts/power-user.js';
 
 import {
@@ -96,11 +97,10 @@ import {
     openai_messages_count,
     chat_completion_sources,
     getChatCompletionModel,
-    isOpenRouterWithInstruct,
     proxies,
     loadProxyPresets,
     selected_proxy,
-    initOpenai,
+    initOpenAI,
 } from './scripts/openai.js';
 
 import {
@@ -159,7 +159,7 @@ import {
 } from './scripts/utils.js';
 import { debounce_timeout } from './scripts/constants.js';
 
-import { ModuleWorkerWrapper, doDailyExtensionUpdatesCheck, extension_settings, getContext, loadExtensionSettings, renderExtensionTemplate, renderExtensionTemplateAsync, runGenerationInterceptors, saveMetadataDebounced, writeExtensionField } from './scripts/extensions.js';
+import { ModuleWorkerWrapper, doDailyExtensionUpdatesCheck, extension_settings, getContext, initExtensions, loadExtensionSettings, renderExtensionTemplate, renderExtensionTemplateAsync, runGenerationInterceptors, saveMetadataDebounced, writeExtensionField } from './scripts/extensions.js';
 import { COMMENT_NAME_DEFAULT, executeSlashCommands, executeSlashCommandsOnChatInput, executeSlashCommandsWithOptions, getSlashCommandsHelp, initDefaultSlashCommands, isExecutingCommandsFromChatInput, pauseScriptExecution, processChatSlashCommands, registerSlashCommand, stopScriptExecution } from './scripts/slash-commands.js';
 import {
     tag_map,
@@ -211,7 +211,7 @@ import {
     selectContextPreset,
 } from './scripts/instruct-mode.js';
 import { initLocales, t, translate } from './scripts/i18n.js';
-import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, getTokenizerModel, initTokenizers, saveTokenCache } from './scripts/tokenizers.js';
+import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, getTokenizerModel, initTokenizers, saveTokenCache, TOKENIZER_SUPPORTED_KEY } from './scripts/tokenizers.js';
 import {
     user_avatar,
     getUserAvatars,
@@ -231,7 +231,7 @@ import { MacrosParser, evaluateMacros, getLastMessageId } from './scripts/macros
 import { currentUser, setUserControls } from './scripts/user.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
-import { ScraperManager } from './scripts/scrapers.js';
+import { initScrapers, ScraperManager } from './scripts/scrapers.js';
 import { SlashCommandParser } from './scripts/slash-commands/SlashCommandParser.js';
 import { SlashCommand } from './scripts/slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './scripts/slash-commands/SlashCommandArgument.js';
@@ -244,6 +244,10 @@ import { SlashCommandEnumValue, enumTypes } from './scripts/slash-commands/Slash
 import { commonEnumProviders, enumIcons } from './scripts/slash-commands/SlashCommandCommonEnumsProvider.js';
 import { initInputMarkdown } from './scripts/input-md-formatting.js';
 import { AbortReason } from './scripts/util/AbortReason.js';
+import { initSystemPrompts } from './scripts/sysprompt.js';
+import { registerExtensionSlashCommands as initExtensionSlashCommands } from './scripts/extensions-slashcommands.js';
+import { ToolManager } from './scripts/tool-calling.js';
+import { applyBrowserFixes } from './scripts/browser-fixes.js';
 
 //exporting functions and vars for mods
 export {
@@ -291,10 +295,17 @@ DOMPurify.addHook('afterSanitizeAttributes', function (node) {
     }
 });
 
-DOMPurify.addHook('uponSanitizeAttribute', (_, data, config) => {
+DOMPurify.addHook('uponSanitizeAttribute', (node, data, config) => {
     if (!config['MESSAGE_SANITIZE']) {
         return;
     }
+
+    /* Retain the classes on UI elements of messages that interact with the main UI */
+    const permittedNodeTypes = ['BUTTON', 'DIV'];
+    if (config['MESSAGE_ALLOW_SYSTEM_UI'] && node.classList.contains('menu_button') && permittedNodeTypes.includes(node.nodeName)) {
+        return;
+    }
+
     switch (data.attrName) {
         case 'class': {
             if (data.attrValue) {
@@ -382,8 +393,8 @@ DOMPurify.addHook('uponSanitizeElement', (node, _, config) => {
 
         if (localStorage.getItem(warningShownKey) === null) {
             const warningToast = toastr.warning(
-                'Use the "Ext. Media" button to allow it. Click on this message to dismiss.',
-                'External media has been blocked',
+                t`Use the 'Ext. Media' button to allow it. Click on this message to dismiss.`,
+                t`External media has been blocked`,
                 {
                     timeOut: 0,
                     preventDuplicates: true,
@@ -412,6 +423,7 @@ export const event_types = {
     MESSAGE_FILE_EMBEDDED: 'message_file_embedded',
     IMPERSONATE_READY: 'impersonate_ready',
     CHAT_CHANGED: 'chat_id_changed',
+    GENERATION_AFTER_COMMANDS: 'GENERATION_AFTER_COMMANDS',
     GENERATION_STARTED: 'generation_started',
     GENERATION_STOPPED: 'generation_stopped',
     GENERATION_ENDED: 'generation_ended',
@@ -460,11 +472,11 @@ export const event_types = {
     FILE_ATTACHMENT_DELETED: 'file_attachment_deleted',
     WORLDINFO_FORCE_ACTIVATE: 'worldinfo_force_activate',
     OPEN_CHARACTER_LIBRARY: 'open_character_library',
-    LLM_FUNCTION_TOOL_REGISTER: 'llm_function_tool_register',
-    LLM_FUNCTION_TOOL_CALL: 'llm_function_tool_call',
     ONLINE_STATUS_CHANGED: 'online_status_changed',
     IMAGE_SWIPED: 'image_swiped',
     CONNECTION_PROFILE_LOADED: 'connection_profile_loaded',
+    TOOL_CALLS_PERFORMED: 'tool_calls_performed',
+    TOOL_CALLS_RENDERED: 'tool_calls_rendered',
 };
 
 export const eventSource = new EventEmitter();
@@ -510,6 +522,7 @@ let saveCharactersPage = 0;
 export const default_avatar = 'img/ai4.png';
 export const system_avatar = 'img/five.png';
 export const comment_avatar = 'img/quill.png';
+export const default_user_avatar = 'img/user-default.png';
 export let CLIENT_VERSION = 'SillyTavern:UNKNOWN:Cohee#1207'; // For Horde header
 let optionsPopper = Popper.createPopper(document.getElementById('options_button'), document.getElementById('options'), {
     placement: 'top-start',
@@ -646,6 +659,7 @@ async function getSystemMessages() {
             force_avatar: system_avatar,
             is_user: false,
             is_system: true,
+            uses_system_ui: true,
             mes: await renderTemplateAsync('welcome', { displayVersion }),
         },
         group: {
@@ -921,16 +935,22 @@ async function firstLoadInit() {
         token = tokenData.token;
     } catch {
         hideLoader();
-        toastr.error('Couldn\'t get CSRF token. Please refresh the page.', 'Error', { timeOut: 0, extendedTimeOut: 0, preventDuplicates: true });
+        toastr.error(t`Couldn't get CSRF token. Please refresh the page.`, t`Error`, { timeOut: 0, extendedTimeOut: 0, preventDuplicates: true });
         throw new Error('Initialization failed');
     }
 
-    addSafariPatch();
+    applyBrowserFixes();
     await getClientVersion();
     await readSecretState();
-    initLocales();
+    await initLocales();
     initDefaultSlashCommands();
     initTextGenModels();
+    initOpenAI();
+    initSystemPrompts();
+    initExtensions();
+    initExtensionSlashCommands();
+    ToolManager.initToolSlashCommands();
+    await initPresetManager();
     await getSystemMessages();
     sendSystemMessage(system_message_types.WELCOME);
     sendSystemMessage(system_message_types.WELCOME_PROMPT);
@@ -938,13 +958,11 @@ async function firstLoadInit() {
     initKeyboard();
     initDynamicStyles();
     initTags();
-    initOpenai();
     initBookmarks();
     await getUserAvatars(true, user_avatar);
     await getCharacters();
     await getBackgrounds();
     await initTokenizers();
-    await initPresetManager();
     initBackgrounds();
     initAuthorsNote();
     initPersonas();
@@ -953,6 +971,7 @@ async function firstLoadInit() {
     initCfg();
     initLogprobs();
     initInputMarkdown();
+    await initScrapers();
     doDailyExtensionUpdatesCheck();
     await hideLoader();
     await fixViewport();
@@ -1133,7 +1152,7 @@ async function getStatusKobold() {
 
         // We didn't get a 200 status code, but the endpoint has an explanation. Which means it DID connect, but I digress.
         if (online_status === 'no_connection' && data.response) {
-            toastr.error(data.response, 'API Error', { timeOut: 5000, preventDuplicates: true });
+            toastr.error(data.response, t`API Error`, { timeOut: 5000, preventDuplicates: true });
         }
     } catch (err) {
         console.error('Error getting status', err);
@@ -1166,7 +1185,6 @@ async function getStatusTextgen() {
             body: JSON.stringify({
                 api_server: endpoint,
                 api_type: textgen_settings.type,
-                legacy_api: textgen_settings.legacy_api && textgen_settings.type === OOBA,
             }),
             signal: abortStatusCheck.signal,
         });
@@ -1214,9 +1232,12 @@ async function getStatusTextgen() {
         // Determine instruct mode preset
         autoSelectInstructPreset(online_status);
 
+        const supportsTokenization = response.headers.get('x-supports-tokenization') === 'true';
+        supportsTokenization ? sessionStorage.setItem(TOKENIZER_SUPPORTED_KEY, 'true') : sessionStorage.removeItem(TOKENIZER_SUPPORTED_KEY);
+
         // We didn't get a 200 status code, but the endpoint has an explanation. Which means it DID connect, but I digress.
         if (online_status === 'no_connection' && data.response) {
-            toastr.error(data.response, 'API Error', { timeOut: 5000, preventDuplicates: true });
+            toastr.error(data.response, t`API Error`, { timeOut: 5000, preventDuplicates: true });
         }
     } catch (err) {
         if (err instanceof AbortReason) {
@@ -1268,7 +1289,7 @@ export async function selectCharacterById(id) {
     }
 
     if (isChatSaving) {
-        toastr.info('Please wait until the chat is saved before switching characters.', 'Your chat is still saving...');
+        toastr.info(t`Please wait until the chat is saved before switching characters.`, t`Your chat is still saving...`);
         return;
     }
 
@@ -1622,7 +1643,7 @@ export async function getOneCharacter(avatarUrl) {
         if (indexOf !== -1) {
             characters[indexOf] = getData;
         } else {
-            toastr.error(`Character ${avatarUrl} not found in the list`, 'Error', { timeOut: 5000, preventDuplicates: true });
+            toastr.error(t`Character ${avatarUrl} not found in the list`, t`Error`, { timeOut: 5000, preventDuplicates: true });
         }
     }
 }
@@ -1874,6 +1895,7 @@ export async function reloadCurrentChat() {
 export async function sendTextareaMessage() {
     if (is_send_press) return;
     if (isExecutingCommandsFromChatInput) return;
+    if (this_edit_mes_id) return; // don't proceed if editing a message
 
     let generateType;
     // "Continue on send" is activated when the user hits "send" (or presses enter) on an empty chat box, and the last
@@ -1904,9 +1926,10 @@ export async function sendTextareaMessage() {
  * @param {boolean} isSystem If the message was sent by the system
  * @param {boolean} isUser If the message was sent by the user
  * @param {number} messageId Message index in chat array
+ * @param {object} [sanitizerOverrides] DOMPurify sanitizer option overrides
  * @returns {string} HTML string
  */
-export function messageFormatting(mes, ch_name, isSystem, isUser, messageId) {
+export function messageFormatting(mes, ch_name, isSystem, isUser, messageId, sanitizerOverrides = {}) {
     if (!mes) {
         return '';
     }
@@ -1981,15 +2004,33 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId) {
             });
         }
 
-        mes = mes.replace(/```[\s\S]*?```|``[\s\S]*?``|`[\s\S]*?`|(".+?")|(\u201C.+?\u201D)/gm, function (match, p1, p2) {
-            if (p1) {
-                return '<q>"' + p1.replace(/"/g, '') + '"</q>';
-            } else if (p2) {
-                return '<q>“' + p2.replace(/\u201C|\u201D/g, '') + '”</q>';
-            } else {
-                return match;
-            }
-        });
+        mes = mes.replace(
+            /```[\s\S]*?```|``[\s\S]*?``|`[\s\S]*?`|(".*?")|(\u201C.*?\u201D)|(\u00AB.*?\u00BB)|(\u300C.*?\u300D)|(\u300E.*?\u300F)|(\uFF02.*?\uFF02)/gm,
+            function (match, p1, p2, p3, p4, p5, p6) {
+                if (p1) {
+                    // English double quotes
+                    return `<q>"${p1.slice(1, -1)}"</q>`;
+                } else if (p2) {
+                    // Curly double quotes “ ”
+                    return `<q>“${p2.slice(1, -1)}”</q>`;
+                } else if (p3) {
+                    // Guillemets « »
+                    return `<q>«${p3.slice(1, -1)}»</q>`;
+                } else if (p4) {
+                    // Corner brackets 「 」
+                    return `<q>「${p4.slice(1, -1)}」</q>`;
+                } else if (p5) {
+                    // White corner brackets 『 』
+                    return `<q>『${p5.slice(1, -1)}』</q>`;
+                } else if (p6) {
+                    // Fullwidth quotes ＂ ＂
+                    return `<q>＂${p6.slice(1, -1)}＂</q>`;
+                } else {
+                    // Return the original match if no quotes are found
+                    return match;
+                }
+            },
+        );
 
         // Restore double quotes in tags
         if (!power_user.encode_tags) {
@@ -2017,7 +2058,7 @@ export function messageFormatting(mes, ch_name, isSystem, isUser, messageId) {
     }
 
     /** @type {any} */
-    const config = { MESSAGE_SANITIZE: true, ADD_TAGS: ['custom-style'] };
+    const config = { MESSAGE_SANITIZE: true, ADD_TAGS: ['custom-style'], ...sanitizerOverrides };
     mes = encodeStyleTags(mes);
     mes = DOMPurify.sanitize(mes, config);
     mes = decodeStyleTags(mes);
@@ -2222,6 +2263,18 @@ export function addCopyToCodeBlocks(messageElement) {
 }
 
 
+/**
+ * Adds a single message to the chat.
+ * @param {object} mes Message object
+ * @param {object} [options] Options
+ * @param {string} [options.type='normal'] Message type
+ * @param {number} [options.insertAfter=null] Message ID to insert the new message after
+ * @param {boolean} [options.scroll=true] Whether to scroll to the new message
+ * @param {number} [options.insertBefore=null] Message ID to insert the new message before
+ * @param {number} [options.forceId=null] Force the message ID
+ * @param {boolean} [options.showSwipes=true] Whether to show swipe buttons
+ * @returns {void}
+ */
 export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll = true, insertBefore = null, forceId = null, showSwipes = true } = {}) {
     let messageText = mes['mes'];
     const momentDate = timestampToMoment(mes.send_date);
@@ -2250,7 +2303,7 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         } else if (this_chid === undefined) {
             avatarImg = system_avatar;
         } else {
-            if (characters[this_chid].avatar != 'none') {
+            if (characters[this_chid].avatar !== 'none') {
                 avatarImg = getThumbnailUrl('avatar', characters[this_chid].avatar);
             } else {
                 avatarImg = default_avatar;
@@ -2265,12 +2318,16 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         avatarImg = mes['force_avatar'];
     }
 
+    // if mes.uses_system_ui is true, set an override on the sanitizer options
+    const sanitizerOverrides = mes.uses_system_ui ? { MESSAGE_ALLOW_SYSTEM_UI: true } : {};
+
     messageText = messageFormatting(
         messageText,
         mes.name,
         isSystem,
         mes.is_user,
         chat.indexOf(mes),
+        sanitizerOverrides,
     );
     const bias = messageFormatting(mes.extra?.bias ?? '', '', false, false, -1);
     let bookmarkLink = mes?.extra?.bookmark_link ?? '';
@@ -2317,8 +2374,12 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
         newMessage.addClass('smallSysMes');
     }
 
+    if (Array.isArray(mes?.extra?.tool_invocations)) {
+        newMessage.addClass('toolCall');
+    }
+
     //shows or hides the Prompt display button
-    let mesIdToFind = type == 'swipe' ? params.mesId - 1 : params.mesId;  //Number(newMessage.attr('mesId'));
+    let mesIdToFind = type === 'swipe' ? params.mesId - 1 : params.mesId;  //Number(newMessage.attr('mesId'));
 
     //if we have itemized messages, and the array isn't null..
     if (params.isUser === false && Array.isArray(itemizedPrompts) && itemizedPrompts.length > 0) {
@@ -2358,6 +2419,13 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
     }
 
     addCopyToCodeBlocks(newMessage);
+
+    // Set the swipes counter for past messages, only visible if 'Show Swipes on All Message' is enabled
+    if (!params.isUser && newMessageId !== 0 && newMessageId !== chat.length - 1) {
+        const swipesNum = chat[newMessageId].swipes?.length;
+        const swipeId = chat[newMessageId].swipe_id + 1;
+        newMessage.find('.swipes-counter').text(formatSwipeCounter(swipeId, swipesNum));
+    }
 
     if (showSwipes) {
         $('#chat .mes').last().addClass('last_mes');
@@ -2567,7 +2635,7 @@ export function getStoppingStrings(isImpersonate, isContinue) {
         result.unshift('\n');
     }
 
-    return result.filter(onlyUnique);
+    return result.filter(x => x).filter(onlyUnique);
 }
 
 /**
@@ -2632,7 +2700,7 @@ export function sendSystemMessage(type, text, extra = {}) {
         newMessage.mes = text;
     }
 
-    if (type == system_message_types.SLASH_COMMANDS) {
+    if (type === system_message_types.SLASH_COMMANDS) {
         newMessage.mes = getSlashCommandsHelp();
     }
 
@@ -2646,7 +2714,7 @@ export function sendSystemMessage(type, text, extra = {}) {
     chat.push(newMessage);
     addOneMessage(newMessage);
     is_send_press = false;
-    if (type == system_message_types.SLASH_COMMANDS) {
+    if (type === system_message_types.SLASH_COMMANDS) {
         const browser = new SlashCommandBrowser();
         const spinner = document.querySelector('#chat .last_mes .custom-slashHelp');
         const parent = spinner.parentElement;
@@ -2903,6 +2971,7 @@ class StreamingProcessor {
         this.swipes = [];
         /** @type {import('./scripts/logprobs.js').TokenLogprobs[]} */
         this.messageLogprobs = [];
+        this.toolCalls = [];
     }
 
     #checkDomElements(messageId) {
@@ -2911,6 +2980,13 @@ class StreamingProcessor {
             this.messageTextDom = this.messageDom?.querySelector('.mes_text');
             this.messageTimerDom = this.messageDom?.querySelector('.mes_timer');
             this.messageTokenCounterDom = this.messageDom?.querySelector('.tokenCounterDisplay');
+        }
+    }
+
+    #updateMessageBlockVisibility() {
+        if (this.messageDom instanceof HTMLElement && Array.isArray(this.toolCalls) && this.toolCalls.length > 0) {
+            const shouldHide = ['', '...'].includes(this.result);
+            this.messageDom.classList.toggle('displayNone', shouldHide);
         }
     }
 
@@ -2979,6 +3055,7 @@ class StreamingProcessor {
         }
         else {
             this.#checkDomElements(messageId);
+            this.#updateMessageBlockVisibility();
             const currentTime = new Date();
             // Don't waste time calculating token count for streaming
             const currentTokenCount = isFinal && power_user.message_token_count_enabled ? getTokenCount(processedText, 0) : 0;
@@ -3121,7 +3198,7 @@ class StreamingProcessor {
     }
 
     /**
-     * @returns {Generator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs }, void, void>}
+     * @returns {Generator<{ text: string, swipes: string[], logprobs: import('./scripts/logprobs.js').TokenLogprobs, toolCalls: any[] }, void, void>}
      */
     *nullStreamingGeneration() {
         throw new Error('Generation function for streaming is not hooked up');
@@ -3143,12 +3220,13 @@ class StreamingProcessor {
         try {
             const sw = new Stopwatch(1000 / power_user.streaming_fps);
             const timestamps = [];
-            for await (const { text, swipes, logprobs } of this.generator()) {
+            for await (const { text, swipes, logprobs, toolCalls } of this.generator()) {
                 timestamps.push(Date.now());
                 if (this.isStopped) {
                     return;
                 }
 
+                this.toolCalls = toolCalls;
                 this.result = text;
                 this.swipes = Array.from(swipes ?? []);
                 if (logprobs) {
@@ -3331,13 +3409,15 @@ function removeLastMessage() {
  * @param {GenerateOptions} options Generation options
  * @param {boolean} dryRun Whether to actually generate a message or just assemble the prompt
  * @returns {Promise<any>} Returns a promise that resolves when the text is done generating.
- * @typedef {{automatic_trigger?: boolean, force_name2?: boolean, quiet_prompt?: string, quietToLoud?: boolean, skipWIAN?: boolean, force_chid?: number, signal?: AbortSignal, quietImage?: string, quietName?: string }} GenerateOptions
+ * @typedef {{automatic_trigger?: boolean, force_name2?: boolean, quiet_prompt?: string, quietToLoud?: boolean, skipWIAN?: boolean, force_chid?: number, signal?: AbortSignal, quietImage?: string, quietName?: string, depth?: number }} GenerateOptions
  */
-export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName } = {}, dryRun = false) {
+export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
-    await eventSource.emit(event_types.GENERATION_STARTED, type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage }, dryRun);
     setGenerationProgress(0);
     generation_started = new Date();
+
+    // Occurs every time, even if the generation is aborted due to slash commands execution
+    await eventSource.emit(event_types.GENERATION_STARTED, type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage }, dryRun);
 
     // Don't recreate abort controller if signal is passed
     if (!(abortController && signal)) {
@@ -3358,17 +3438,11 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         }
     }
 
-    if (main_api == 'kobold' && kai_settings.streaming_kobold && !kai_flags.can_use_streaming) {
-        toastr.error('Streaming is enabled, but the version of Kobold used does not support token streaming.', undefined, { timeOut: 10000, preventDuplicates: true });
-        unblockGeneration(type);
-        return Promise.resolve();
-    }
+    // Occurs only if the generation is not aborted due to slash commands execution
+    await eventSource.emit(event_types.GENERATION_AFTER_COMMANDS, type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage }, dryRun);
 
-    if (main_api === 'textgenerationwebui' &&
-        textgen_settings.streaming &&
-        textgen_settings.legacy_api &&
-        textgen_settings.type === OOBA) {
-        toastr.error('Streaming is not supported for the Legacy API. Update Ooba and use new API to enable streaming.', undefined, { timeOut: 10000, preventDuplicates: true });
+    if (main_api == 'kobold' && kai_settings.streaming_kobold && !kai_flags.can_use_streaming) {
+        toastr.error(t`Streaming is enabled, but the version of Kobold used does not support token streaming.`, undefined, { timeOut: 10000, preventDuplicates: true });
         unblockGeneration(type);
         return Promise.resolve();
     }
@@ -3384,7 +3458,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
         if (!pingResult) {
             unblockGeneration(type);
-            toastr.error('Verify that the server is running and accessible.', 'ST Server cannot be reached');
+            toastr.error(t`Verify that the server is running and accessible.`, t`ST Server cannot be reached`);
             throw new Error('Server unreachable');
         }
 
@@ -3515,9 +3589,14 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         jailbreak,
     } = getCharacterCardFields();
 
-    if (isInstruct) {
-        system = power_user.prefer_character_prompt && system ? system : baseChatReplace(power_user.instruct.system_prompt, name1, name2);
-        system = formatInstructModeSystemPrompt(substituteParams(system, name1, name2, power_user.instruct.system_prompt));
+    if (main_api !== 'openai') {
+        if (power_user.sysprompt.enabled) {
+            system = power_user.prefer_character_prompt && system ? system : baseChatReplace(power_user.sysprompt.content, name1, name2);
+            system = isInstruct ? formatInstructModeSystemPrompt(substituteParams(system, name1, name2, power_user.sysprompt.content)) : system;
+        } else {
+            // Nullify if it's not enabled
+            system = '';
+        }
     }
 
     // Depth prompt (character-specific A/N)
@@ -3542,7 +3621,9 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     // Collect messages with usable content
-    let coreChat = chat.filter(x => !x.is_system);
+    const canUseTools = ToolManager.isToolCallingSupported();
+    const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
+    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -3770,7 +3851,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         personality: personality,
         persona: power_user.persona_description_position == persona_description_positions.IN_PROMPT ? persona : '',
         scenario: scenario,
-        system: isInstruct ? system : '',
+        system: system,
         char: name2,
         user: name1,
         wiBefore: worldInfoBefore,
@@ -3929,8 +4010,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
     if (isContinue) {
         // Coping mechanism for OAI spacing
-        const isForceInstruct = isOpenRouterWithInstruct();
-        if (main_api === 'openai' && !isForceInstruct && !cyclePrompt.endsWith(' ')) {
+        if (main_api === 'openai' && !cyclePrompt.endsWith(' ')) {
             cyclePrompt += oai_settings.continue_postfix;
             continue_mag += oai_settings.continue_postfix;
         }
@@ -4344,7 +4424,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             this_max_context: this_max_context,
             padding: power_user.token_padding,
             main_api: main_api,
-            instruction: isInstruct ? substituteParams(power_user.prefer_character_prompt && system ? system : power_user.instruct.system_prompt) : '',
+            instruction: main_api !== 'openai' && power_user.sysprompt.enabled ? substituteParams(power_user.prefer_character_prompt && system ? system : power_user.sysprompt.content) : '',
             userPersona: (power_user.persona_description_position == persona_description_positions.IN_PROMPT ? (persona || '') : ''),
             tokenizer: getFriendlyTokenizerName(main_api).tokenizerName || '',
         };
@@ -4378,7 +4458,31 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
                 getMessage = continue_mag + getMessage;
             }
 
-            if (streamingProcessor && !streamingProcessor.isStopped && streamingProcessor.isFinished) {
+            const isStreamFinished = streamingProcessor && !streamingProcessor.isStopped && streamingProcessor.isFinished;
+            const isStreamWithToolCalls = streamingProcessor && Array.isArray(streamingProcessor.toolCalls) && streamingProcessor.toolCalls.length;
+            if (canPerformToolCalls && isStreamFinished && isStreamWithToolCalls) {
+                const lastMessage = chat[chat.length - 1];
+                const hasToolCalls = ToolManager.hasToolCalls(streamingProcessor.toolCalls);
+                const shouldDeleteMessage = type !== 'swipe' && ['', '...'].includes(lastMessage?.mes) && ['', '...'].includes(streamingProcessor?.result);
+                hasToolCalls && shouldDeleteMessage && await deleteLastMessage();
+                const invocationResult = await ToolManager.invokeFunctionTools(streamingProcessor.toolCalls);
+                if (hasToolCalls) {
+                    if (!invocationResult.invocations.length && shouldDeleteMessage) {
+                        ToolManager.showToolCallError(invocationResult.errors);
+                        unblockGeneration(type);
+                        generatedPromptCache = '';
+                        streamingProcessor = null;
+                        return;
+                    }
+
+                    streamingProcessor = null;
+                    depth = depth + 1;
+                    await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
+                    return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
+                }
+            }
+
+            if (isStreamFinished) {
                 await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
                 streamingProcessor = null;
                 triggerAutoContinue(messageChunk, isImpersonate);
@@ -4408,7 +4512,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             generatedPromptCache = '';
 
             if (data?.response) {
-                toastr.error(data.response, 'API Error', { preventDuplicates: true });
+                toastr.error(data.response, t`API Error`, { preventDuplicates: true });
             }
             throw new Error(data?.response);
         }
@@ -4450,6 +4554,25 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
             parseAndSaveLogprobs(data, continue_mag);
+        }
+
+        if (canPerformToolCalls) {
+            const hasToolCalls = ToolManager.hasToolCalls(data);
+            const shouldDeleteMessage = type !== 'swipe' && ['', '...'].includes(getMessage);
+            hasToolCalls && shouldDeleteMessage && await deleteLastMessage();
+            const invocationResult = await ToolManager.invokeFunctionTools(data);
+            if (hasToolCalls) {
+                if (!invocationResult.invocations.length && shouldDeleteMessage) {
+                    ToolManager.showToolCallError(invocationResult.errors);
+                    unblockGeneration(type);
+                    generatedPromptCache = '';
+                    return;
+                }
+
+                depth = depth + 1;
+                await ToolManager.saveFunctionToolInvocations(invocationResult.invocations);
+                return Generate('normal', { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, depth }, dryRun);
+            }
         }
 
         if (type !== 'quiet') {
@@ -4499,7 +4622,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
     function onError(exception) {
         if (typeof exception?.error?.message === 'string') {
-            toastr.error(exception.error.message, 'Error', { timeOut: 10000, extendedTimeOut: 20000 });
+            toastr.error(exception.error.message, t`Error`, { timeOut: 10000, extendedTimeOut: 20000 });
         }
 
         generatedPromptCache = '';
@@ -4766,7 +4889,7 @@ export function removeMacros(str) {
  * @param {boolean} [compact] Send as a compact display message.
  * @param {string} [name] Name of the user sending the message. Defaults to name1.
  * @param {string} [avatar] Avatar of the user sending the message. Defaults to user_avatar.
- * @returns {Promise<void>} A promise that resolves when the message is inserted.
+ * @returns {Promise<any>} A promise that resolves to the message when it is inserted.
  */
 export async function sendMessageAsUser(messageText, messageBias, insertAt = null, compact = false, name = name1, avatar = user_avatar) {
     messageText = getRegexedString(messageText, regex_placement.USER_INPUT);
@@ -4813,6 +4936,8 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, chat_id);
         await saveChatConditional();
     }
+
+    return message;
 }
 
 /**
@@ -4842,6 +4967,13 @@ export function getMaxContextSize(overrideResponseLength = null) {
                 this_max_context = subscriptionLimit;
                 console.log(`NovelAI subscription limit reached. Max context size is now ${this_max_context}`);
             }
+        }
+        if (nai_settings.model_novel.includes('erato')) {
+            // subscriber limits coming soon
+            this_max_context = Math.min(max_context, 8192);
+
+            // Added special tokens and whatnot
+            this_max_context -= 10;
         }
 
         this_max_context = this_max_context - (overrideResponseLength || amount_gen);
@@ -4894,7 +5026,7 @@ function addChatsSeparator(mesSendString) {
 
 async function duplicateCharacter() {
     if (!this_chid) {
-        toastr.warning('You must first select a character to duplicate!');
+        toastr.warning(t`You must first select a character to duplicate!`);
         return '';
     }
 
@@ -4913,7 +5045,7 @@ async function duplicateCharacter() {
         body: JSON.stringify(body),
     });
     if (response.ok) {
-        toastr.success('Character Duplicated');
+        toastr.success(t`Character Duplicated`);
         const data = await response.json();
         await eventSource.emit(event_types.CHARACTER_DUPLICATED, { oldAvatar: body.avatar_url, newAvatar: data.path });
         await getCharacters();
@@ -5295,7 +5427,7 @@ function extractMessageFromData(data) {
         case 'novel':
             return data.output;
         case 'openai':
-            return data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.text ?? '';
+            return data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.text ?? data?.message?.content?.[0]?.text ?? data?.message?.tool_plan ?? '';
         default:
             return '';
     }
@@ -5402,6 +5534,7 @@ export function cleanUpMessage(getMessage, isImpersonate, isContinue, displayInc
         getMessage = getMessage.substring(0, getMessage.indexOf('<|endoftext|>'));
     }
     const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
+    const isNotEmpty = (str) => str && str.trim() !== '';
     if (isInstruct && power_user.instruct.stop_sequence) {
         if (getMessage.indexOf(power_user.instruct.stop_sequence) != -1) {
             getMessage = getMessage.substring(0, getMessage.indexOf(power_user.instruct.stop_sequence));
@@ -5409,7 +5542,7 @@ export function cleanUpMessage(getMessage, isImpersonate, isContinue, displayInc
     }
     // Hana: Only use the first sequence (should be <|model|>)
     // of the prompt before <|user|> (as KoboldAI Lite does it).
-    if (isInstruct && power_user.instruct.input_sequence) {
+    if (isInstruct && isNotEmpty(power_user.instruct.input_sequence)) {
         if (getMessage.indexOf(power_user.instruct.input_sequence) != -1) {
             getMessage = getMessage.substring(0, getMessage.indexOf(power_user.instruct.input_sequence));
         }
@@ -5470,7 +5603,7 @@ export function cleanUpMessage(getMessage, isImpersonate, isContinue, displayInc
     }
 
     if (!displayIncompleteSentences && power_user.trim_sentences) {
-        getMessage = trimToEndSentence(getMessage, power_user.include_newline);
+        getMessage = trimToEndSentence(getMessage);
     }
 
     if (power_user.trim_spaces) {
@@ -5759,23 +5892,23 @@ export function setSendButtonState(value) {
 
 export async function renameCharacter(name = null, { silent = false, renameChats = null } = {}) {
     if (!name && silent) {
-        toastr.warning('No character name provided.', 'Rename Character');
+        toastr.warning(t`No character name provided.`, t`Rename Character`);
         return false;
     }
     if (this_chid === undefined) {
-        toastr.warning('No character selected.', 'Rename Character');
+        toastr.warning(t`No character selected.`, t`Rename Character`);
         return false;
     }
 
     const oldAvatar = characters[this_chid].avatar;
-    const newValue = name || await callGenericPopup('<h3>New name:</h3>', POPUP_TYPE.INPUT, characters[this_chid].name);
+    const newValue = name || await callGenericPopup('<h3>' + t`New name:` + '</h3>', POPUP_TYPE.INPUT, characters[this_chid].name);
 
     if (!newValue) {
-        toastr.warning('No character name provided.', 'Rename Character');
+        toastr.warning(t`No character name provided.`, t`Rename Character`);
         return false;
     }
     if (newValue === characters[this_chid].name) {
-        toastr.info('Same character name provided, so name did not change.', 'Rename Character');
+        toastr.info(t`Same character name provided, so name did not change.`, t`Rename Character`);
         return false;
     }
 
@@ -5822,9 +5955,9 @@ export async function renameCharacter(name = null, { silent = false, renameChats
                 if (renamePastChatsConfirm) {
                     await renamePastChats(newAvatar, newValue);
                     await reloadCurrentChat();
-                    toastr.success('Character renamed and past chats updated!', 'Rename Character');
+                    toastr.success(t`Character renamed and past chats updated!`, t`Rename Character`);
                 } else {
-                    toastr.success('Character renamed!', 'Rename Character');
+                    toastr.success(t`Character renamed!`, t`Rename Character`);
                 }
             }
             else {
@@ -5837,8 +5970,8 @@ export async function renameCharacter(name = null, { silent = false, renameChats
     }
     catch (error) {
         // Reloading to prevent data corruption
-        if (!silent) await callPopup('Something went wrong. The page will be reloaded.', 'text');
-        else toastr.error('Something went wrong. The page will be reloaded.', 'Rename Character');
+        if (!silent) await callPopup(t`Something went wrong. The page will be reloaded.`, 'text');
+        else toastr.error(t`Something went wrong. The page will be reloaded.`, t`Rename Character`);
 
         console.log('Renaming character error:', error);
         location.reload();
@@ -5895,7 +6028,7 @@ async function renamePastChats(newAvatar, newValue) {
                 }
             }
         } catch (error) {
-            toastr.error(`Past chat could not be updated: ${file_name}`);
+            toastr.error(t`Past chat could not be updated: ${file_name}`);
             console.error(error);
         }
     }
@@ -5944,7 +6077,7 @@ export async function saveChat(chatName, withMetadata, mesId) {
     characters[this_chid]['date_last_chat'] = Date.now();
     chat.forEach(function (item, i) {
         if (item['is_group']) {
-            toastr.error('Trying to save group chat with regular saveChat function. Aborting to prevent corruption.');
+            toastr.error(t`Trying to save group chat with regular saveChat function. Aborting to prevent corruption.`);
             throw new Error('Group chat saved from saveChat');
         }
         /*
@@ -5989,7 +6122,7 @@ export async function saveChat(chatName, withMetadata, mesId) {
         contentType: 'application/json',
         success: function (data) { },
         error: function (jqXHR, exception) {
-            toastr.error('Check the server connection and reload the page to prevent data loss.', 'Chat could not be saved');
+            toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Chat could not be saved`);
             console.log(exception);
             console.log(jqXHR);
         },
@@ -6218,6 +6351,7 @@ export function changeMainAPI() {
     //console.log(selectedVal);
     const apiElements = {
         'koboldhorde': {
+            apiStreaming: $('#NULL_SELECTOR'),
             apiSettings: $('#kobold_api-settings'),
             apiConnector: $('#kobold_horde'),
             apiPresets: $('#kobold_api-presets'),
@@ -6226,6 +6360,7 @@ export function changeMainAPI() {
             amountGenElem: $('#amount_gen_block'),
         },
         'kobold': {
+            apiStreaming: $('#streaming_kobold_block'),
             apiSettings: $('#kobold_api-settings'),
             apiConnector: $('#kobold_api'),
             apiPresets: $('#kobold_api-presets'),
@@ -6234,6 +6369,7 @@ export function changeMainAPI() {
             amountGenElem: $('#amount_gen_block'),
         },
         'textgenerationwebui': {
+            apiStreaming: $('#streaming_textgenerationwebui_block'),
             apiSettings: $('#textgenerationwebui_api-settings'),
             apiConnector: $('#textgenerationwebui_api'),
             apiPresets: $('#textgenerationwebui_api-presets'),
@@ -6242,6 +6378,7 @@ export function changeMainAPI() {
             amountGenElem: $('#amount_gen_block'),
         },
         'novel': {
+            apiStreaming: $('#streaming_novel_block'),
             apiSettings: $('#novel_api-settings'),
             apiConnector: $('#novel_api'),
             apiPresets: $('#novel_api-presets'),
@@ -6250,6 +6387,7 @@ export function changeMainAPI() {
             amountGenElem: $('#amount_gen_block'),
         },
         'openai': {
+            apiStreaming: $('#NULL_SELECTOR'),
             apiSettings: $('#openai_settings'),
             apiConnector: $('#openai_api'),
             apiPresets: $('#openai_api-presets'),
@@ -6272,12 +6410,14 @@ export function changeMainAPI() {
         apiObj.apiConnector.css('display', 'none');
         apiObj.apiRanges.css('display', 'none');
         apiObj.apiPresets.css('display', 'none');
+        apiObj.apiStreaming.css('display', 'none');
     }
 
     //then, find and enable the active item.
     //This is split out of the loop so that different apis can share settings divs
     let activeItem = apiElements[selectedVal];
 
+    activeItem.apiStreaming.css('display', 'block');
     activeItem.apiSettings.css('display', 'block');
     activeItem.apiConnector.css('display', 'block');
     activeItem.apiRanges.css('display', 'block');
@@ -6294,17 +6434,6 @@ export function changeMainAPI() {
     }
 
     //custom because streaming has been moved up under response tokens, which exists inside common settings block
-    if (selectedVal === 'textgenerationwebui') {
-        $('#streaming_textgenerationwebui_block').css('display', 'block');
-    } else {
-        $('#streaming_textgenerationwebui_block').css('display', 'none');
-    }
-    if (selectedVal === 'kobold') {
-        $('#streaming_kobold_block').css('display', 'block');
-    } else {
-        $('#streaming_kobold_block').css('display', 'none');
-    }
-
     if (selectedVal === 'novel') {
         $('#ai_module_block_novel').css('display', 'block');
     } else {
@@ -6386,7 +6515,7 @@ export async function getSettings() {
 
     if (!response.ok) {
         reloadLoop();
-        toastr.error('Settings could not be loaded after multiple attempts. Please try again later.');
+        toastr.error(t`Settings could not be loaded after multiple attempts. Please try again later.`);
         throw new Error('Error getting settings');
     }
 
@@ -6613,7 +6742,7 @@ export async function saveSettings(type) {
             eventSource.emit(event_types.SETTINGS_UPDATED);
         },
         error: function (jqXHR, exception) {
-            toastr.error('Check the server connection and reload the page to prevent data loss.', 'Settings could not be saved');
+            toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
             console.log(exception);
             console.log(jqXHR);
         },
@@ -6656,7 +6785,10 @@ function updateMessage(div) {
     text = getRegexedString(
         text,
         regexPlacement,
-        { characterOverride: mes.extra?.type === 'narrator' ? undefined : mes.name },
+        {
+            characterOverride: mes.extra?.type === 'narrator' ? undefined : mes.name,
+            isEdit: true,
+        },
     );
 
 
@@ -6879,7 +7011,7 @@ export async function displayPastChats() {
     const data = await (selected_group ? getGroupPastChats(selected_group) : getPastCharacterChats());
 
     if (!data) {
-        toastr.error('Could not load chat data. Try reloading the page.');
+        toastr.error(t`Could not load chat data. Try reloading the page.`);
         return;
     }
 
@@ -6921,15 +7053,13 @@ export async function displayPastChats() {
             }
             // Check whether `text` {string} includes all of the `fragments` {string[]}.
             function matchFragments(fragments, text) {
-                if (!text) {
-                    return false;
-                }
-                return fragments.every(item => text.includes(item));
+                if (!text || !text.toLowerCase) return false;
+                return fragments.every(item => text.toLowerCase().includes(item));
             }
             const fragments = makeQueryFragments(searchQuery);
             // At least one chat message must match *all* the fragments.
             // Currently, this doesn't match if the fragment matches are distributed across several chat messages.
-            return chatContent && Object.values(chatContent).some(message => matchFragments(fragments, message?.mes?.toLowerCase()));
+            return chatContent && Object.values(chatContent).some(message => matchFragments(fragments, message?.mes));
         });
 
         console.debug(filteredData);
@@ -7014,7 +7144,7 @@ export function selectRightMenuWithAnimation(selectedMenuId) {
 
 export function select_rm_info(type, charId, previousCharId = null) {
     if (!type) {
-        toastr.error('Invalid process (no \'type\')');
+        toastr.error(t`Invalid process (no 'type')`);
         return;
     }
     if (type !== 'group_create') {
@@ -7022,20 +7152,20 @@ export function select_rm_info(type, charId, previousCharId = null) {
     }
 
     if (type === 'char_delete') {
-        toastr.warning(`Character Deleted: ${displayName}`);
+        toastr.warning(t`Character Deleted: ${displayName}`);
     }
     if (type === 'char_create') {
-        toastr.success(`Character Created: ${displayName}`);
+        toastr.success(t`Character Created: ${displayName}`);
     }
     if (type === 'group_create') {
-        toastr.success('Group Created');
+        toastr.success(t`Group Created`);
     }
     if (type === 'group_delete') {
-        toastr.warning('Group Deleted');
+        toastr.warning(t`Group Deleted`);
     }
 
     if (type === 'char_import') {
-        toastr.success(`Character Imported: ${displayName}`);
+        toastr.success(t`Character Imported: ${displayName}`);
     }
 
     selectRightMenuWithAnimation('rm_characters_block');
@@ -7370,7 +7500,7 @@ function onScenarioOverrideRemoveClick() {
  */
 export function callPopup(text, type, inputValue = '', { okButton, rows, wide, wider, large, allowHorizontalScrolling, allowVerticalScrolling, cropAspect } = {}) {
     function getOkButtonText() {
-        if (['text', 'alternate_greeting', 'char_not_selected'].includes(popup_type)) {
+        if (['text', 'char_not_selected'].includes(popup_type)) {
             $dialoguePopupCancel.css('display', 'none');
             return okButton ?? 'Ok';
         } else if (['delete_extension'].includes(popup_type)) {
@@ -7444,7 +7574,6 @@ export function showSwipeButtons() {
     //had to add this to make the swipe counter work
     //(copied from the onclick functions for swipe buttons..
     //don't know why the array isn't set for non-swipe messsages in Generate or addOneMessage..)
-
     if (chat[chat.length - 1]['swipe_id'] === undefined) {              // if there is no swipe-message in the last spot of the chat array
         chat[chat.length - 1]['swipe_id'] = 0;                        // set it to id 0
         chat[chat.length - 1]['swipes'] = [];                         // empty the array
@@ -7453,33 +7582,37 @@ export function showSwipeButtons() {
 
     const currentMessage = $('#chat').children().filter(`[mesid="${chat.length - 1}"]`);
     const swipeId = chat[chat.length - 1].swipe_id;
-    const swipeCounterText = (`${(swipeId + 1)}\u200B/\u200b${(chat[chat.length - 1].swipes.length)}`);
+    const swipeCounterText = formatSwipeCounter((swipeId + 1), chat[chat.length - 1].swipes.length);
+    const swipeRight = currentMessage.find('.swipe_right');
+    const swipeLeft = currentMessage.find('.swipe_left');
+    const swipeCounter = currentMessage.find('.swipes-counter');
 
     if (swipeId !== undefined && (chat[chat.length - 1].swipes.length > 1 || swipeId > 0)) {
-        currentMessage.children('.swipe_left').css('display', 'flex');
+        swipeLeft.css('display', 'flex');
     }
     //only show right when generate is off, or when next right swipe would not make a generate happen
     if (is_send_press === false || chat[chat.length - 1].swipes.length >= swipeId) {
-        currentMessage.children('.swipe_right').css('display', 'flex');
-        currentMessage.children('.swipe_right').css('opacity', '0.3');
+        swipeRight.css('display', 'flex').css('opacity', '0.3');
+        swipeCounter.css('opacity', '0.3');
     }
-    //console.log((chat[chat.length - 1]));
     if ((chat[chat.length - 1].swipes.length - swipeId) === 1) {
-        //console.log('highlighting R swipe');
-        currentMessage.children('.swipe_right').css('opacity', '0.7');
+        //chevron was moved out of hardcode in HTML to class toggle dependent on last_mes or not
+        //necessary for 'swipe_right' div in past messages to have no chevron if 'show swipes for all messages' is turned on
+        swipeRight.css('opacity', '0.7');
+        swipeCounter.css('opacity', '0.7');
     }
-    //console.log(swipesCounterHTML);
 
-    $('.swipes-counter').text(swipeCounterText);
+    //allows for writing individual swipe counters for past messages
+    const lastSwipeCounter = $('.last_mes .swipes-counter');
+    lastSwipeCounter.text(swipeCounterText).show();
 
-    //console.log(swipeId);
-    //console.log(chat[chat.length - 1].swipes.length);
+    switchSwipeNumAllMessages();
 }
 
 export function hideSwipeButtons() {
-    //console.log('hideswipebuttons entered');
-    $('#chat').find('.swipe_right').css('display', 'none');
-    $('#chat').find('.swipe_left').css('display', 'none');
+    $('#chat').find('.swipe_right').hide();
+    $('#chat').find('.last_mes .swipes-counter').hide();
+    $('#chat').find('.swipe_left').hide();
 }
 
 /**
@@ -7490,25 +7623,25 @@ export function hideSwipeButtons() {
  */
 export async function deleteSwipe(swipeId = null) {
     if (swipeId && (isNaN(swipeId) || swipeId < 0)) {
-        toastr.warning(`Invalid swipe ID: ${swipeId + 1}`);
+        toastr.warning(t`Invalid swipe ID: ${swipeId + 1}`);
         return;
     }
 
     const lastMessage = chat[chat.length - 1];
     if (!lastMessage || !Array.isArray(lastMessage.swipes) || !lastMessage.swipes.length) {
-        toastr.warning('No messages to delete swipes from.');
+        toastr.warning(t`No messages to delete swipes from.`);
         return;
     }
 
     if (lastMessage.swipes.length <= 1) {
-        toastr.warning('Can\'t delete the last swipe.');
+        toastr.warning(t`Can't delete the last swipe.`);
         return;
     }
 
     swipeId = swipeId ?? lastMessage.swipe_id;
 
     if (swipeId < 0 || swipeId >= lastMessage.swipes.length) {
-        toastr.warning(`Invalid swipe ID: ${swipeId + 1}`);
+        toastr.warning(t`Invalid swipe ID: ${swipeId + 1}`);
         return;
     }
 
@@ -7647,7 +7780,7 @@ export function setGenerationProgress(progress) {
 
 function isHordeGenerationNotAllowed() {
     if (main_api == 'koboldhorde' && preset_settings == 'gui') {
-        toastr.error('GUI Settings preset is not supported for Horde. Please select another preset.');
+        toastr.error(t`GUI Settings preset is not supported for Horde. Please select another preset.`);
         return true;
     }
 
@@ -7696,7 +7829,7 @@ function openCharacterWorldPopup() {
                     }
 
                     $('#character_json_data').val(JSON.stringify(data));
-                    toastr.info('Embedded lorebook will be removed from this character.');
+                    toastr.info(t`Embedded lorebook will be removed from this character.`);
                 } catch {
                     console.error('Failed to parse character JSON data.');
                 }
@@ -7807,24 +7940,42 @@ function openAlternateGreetings() {
 
     const template = $('#alternate_greetings_template .alternate_grettings').clone();
     const getArray = () => menu_type == 'create' ? create_save.alternate_greetings : characters[chid].data.alternate_greetings;
+    const popup = new Popup(template, POPUP_TYPE.TEXT, '', {
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
+        onClose: async () => {
+            if (menu_type !== 'create') {
+                await createOrEditCharacter();
+            }
+        },
+    });
 
     for (let index = 0; index < getArray().length; index++) {
-        addAlternateGreeting(template, getArray()[index], index, getArray);
+        addAlternateGreeting(template, getArray()[index], index, getArray, popup);
     }
 
     template.find('.add_alternate_greeting').on('click', function () {
         const array = getArray();
         const index = array.length;
         array.push('');
-        addAlternateGreeting(template, '', index, getArray);
+        addAlternateGreeting(template, '', index, getArray, popup);
         updateAlternateGreetingsHintVisibility(template);
     });
 
+    popup.show();
     updateAlternateGreetingsHintVisibility(template);
-    callPopup(template, 'alternate_greeting', '', { wide: true, large: true });
 }
 
-function addAlternateGreeting(template, greeting, index, getArray) {
+/**
+ * Adds an alternate greeting to the template.
+ * @param {JQuery<HTMLElement>} template
+ * @param {string} greeting
+ * @param {number} index
+ * @param {() => any[]} getArray
+ * @param {Popup} popup
+ */
+function addAlternateGreeting(template, greeting, index, getArray, popup) {
     const greetingBlock = $('#alternate_greeting_form_template .alternate_greeting').clone();
     greetingBlock.find('.alternate_greeting_text').on('input', async function () {
         const value = $(this).val();
@@ -7832,11 +7983,16 @@ function addAlternateGreeting(template, greeting, index, getArray) {
         array[index] = value;
     }).val(greeting);
     greetingBlock.find('.greeting_index').text(index + 1);
-    greetingBlock.find('.delete_alternate_greeting').on('click', async function () {
-        if (confirm('Are you sure you want to delete this alternate greeting?')) {
+    greetingBlock.find('.delete_alternate_greeting').on('click', async function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (confirm(t`Are you sure you want to delete this alternate greeting?`)) {
             const array = getArray();
             array.splice(index, 1);
+
             // We need to reopen the popup to update the index numbers
+            await popup.complete(POPUP_RESULT.AFFIRMATIVE);
             openAlternateGreetings();
         }
     });
@@ -7864,11 +8020,11 @@ async function createOrEditCharacter(e) {
 
     if ($('#form_create').attr('actiontype') == 'createcharacter') {
         if (String($('#character_name_pole').val()).length === 0) {
-            toastr.error('Name is required');
+            toastr.error(t`Name is required`);
             return;
         }
         if (is_group_generating || is_send_press) {
-            toastr.error('Cannot create characters while generating. Stop the request and try again.', 'Creation aborted');
+            toastr.error(t`Cannot create characters while generating. Stop the request and try again.`, t`Creation aborted`);
             return;
         }
         try {
@@ -7952,7 +8108,7 @@ async function createOrEditCharacter(e) {
 
         } catch (error) {
             console.error('Error creating character', error);
-            toastr.error('Failed to create character');
+            toastr.error(t`Failed to create character`);
         }
     } else {
         try {
@@ -8011,7 +8167,7 @@ async function createOrEditCharacter(e) {
             }
         } catch (error) {
             console.log(error);
-            toastr.error('Something went wrong while saving the character, or the image file provided was in an invalid format. Double check that the image is not a webp.');
+            toastr.error(t`Something went wrong while saving the character, or the image file provided was in an invalid format. Double check that the image is not a webp.`);
         }
     }
 }
@@ -8069,6 +8225,10 @@ window['SillyTavern'].getContext = function () {
         registerHelper: () => { },
         registerMacro: MacrosParser.registerMacro.bind(MacrosParser),
         unregisterMacro: MacrosParser.unregisterMacro.bind(MacrosParser),
+        registerFunctionTool: ToolManager.registerFunctionTool.bind(ToolManager),
+        unregisterFunctionTool: ToolManager.unregisterFunctionTool.bind(ToolManager),
+        isToolCallingSupported: ToolManager.isToolCallingSupported.bind(ToolManager),
+        canPerformToolCalls: ToolManager.canPerformToolCalls.bind(ToolManager),
         registerDebugFunction: registerDebugFunction,
         /** @deprecated Use renderExtensionTemplateAsync instead. */
         renderExtensionTemplate: renderExtensionTemplate,
@@ -8103,6 +8263,20 @@ window['SillyTavern'].getContext = function () {
         POPUP_RESULT: POPUP_RESULT,
     };
 };
+
+/**
+ * Formats a counter for a swipe view.
+ * @param {number} current The current number of items.
+ * @param {number} total The total number of items.
+ * @returns {string} The formatted counter.
+ */
+function formatSwipeCounter(current, total) {
+    if (isNaN(current) || isNaN(total)) {
+        return '';
+    }
+
+    return `${current}\u200b/\u200b${total}`;
+}
 
 function swipe_left() {      // when we swipe left..but no generation.
     if (chat.length - 1 === Number(this_edit_mes_id)) {
@@ -8291,8 +8465,8 @@ const swipe_right = () => {
     }
 
     const currentMessage = $('#chat').children().filter(`[mesid="${chat.length - 1}"]`);
-    let this_div = currentMessage.children('.swipe_right');
-    let this_mes_div = this_div.parent();
+    let this_div = currentMessage.find('.swipe_right');
+    let this_mes_div = this_div.parent().parent();
 
     if (chat[chat.length - 1]['swipe_id'] > chat[chat.length - 1]['swipes'].length) { //if we swipe right while generating (the swipe ID is greater than what we are viewing now)
         chat[chat.length - 1]['swipe_id'] = chat[chat.length - 1]['swipes'].length; //show that message slot (will be '...' while generating)
@@ -8302,7 +8476,7 @@ const swipe_right = () => {
     }
     // handles animated transitions when swipe right, specifically height transitions between messages
     if (run_generate || run_swipe_right) {
-        let this_mes_block = this_mes_div.children('.mes_block').children('.mes_text');
+        let this_mes_block = this_mes_div.find('.mes_block .mes_text');
         const this_mes_div_height = this_mes_div[0].scrollHeight;
         const this_mes_block_height = this_mes_block[0].scrollHeight;
 
@@ -8430,11 +8604,21 @@ const CONNECT_API_MAP = {
         selected: 'novel',
         button: '#api_button_novel',
     },
+    'koboldcpp': {
+        selected: 'textgenerationwebui',
+        button: '#api_button_textgenerationwebui',
+        type: textgen_types.KOBOLDCPP,
+    },
     // KoboldCpp alias
     'kcpp': {
         selected: 'textgenerationwebui',
         button: '#api_button_textgenerationwebui',
         type: textgen_types.KOBOLDCPP,
+    },
+    'openai': {
+        selected: 'openai',
+        button: '#api_button_openai',
+        source: chat_completion_sources.OPENAI,
     },
     // OpenAI alias
     'oai': {
@@ -8493,7 +8677,7 @@ async function selectContextCallback(args, name) {
     const result = fuse.search(name);
 
     if (result.length === 0) {
-        !quiet && toastr.warning(`Context template "${name}" not found`);
+        !quiet && toastr.warning(t`Context template '${name}' not found`);
         return '';
     }
 
@@ -8513,7 +8697,7 @@ async function selectInstructCallback(args, name) {
     const result = fuse.search(name);
 
     if (result.length === 0) {
-        !quiet && toastr.warning(`Instruct template "${name}" not found`);
+        !quiet && toastr.warning(t`Instruct template '${name}' not found`);
         return '';
     }
 
@@ -8565,29 +8749,36 @@ async function connectAPISlash(args, text) {
 
     const apiConfig = CONNECT_API_MAP[text.toLowerCase()];
     if (!apiConfig) {
-        toastr.error(`Error: ${text} is not a valid API`);
+        toastr.error(t`Error: ${text} is not a valid API`);
         return '';
     }
 
-    $(`#main_api option[value='${apiConfig.selected || text}']`).prop('selected', true);
-    $('#main_api').trigger('change');
+    let connectionRequired = false;
 
-    if (apiConfig.source) {
+    if (main_api !== apiConfig.selected) {
+        $(`#main_api option[value='${apiConfig.selected || text}']`).prop('selected', true);
+        $('#main_api').trigger('change');
+        connectionRequired = true;
+    }
+
+    if (apiConfig.source && oai_settings.chat_completion_source !== apiConfig.source) {
         $(`#chat_completion_source option[value='${apiConfig.source}']`).prop('selected', true);
         $('#chat_completion_source').trigger('change');
+        connectionRequired = true;
     }
 
-    if (apiConfig.type) {
+    if (apiConfig.type && textgen_settings.type !== apiConfig.type) {
         $(`#textgen_type option[value='${apiConfig.type}']`).prop('selected', true);
         $('#textgen_type').trigger('change');
+        connectionRequired = true;
     }
 
-    if (apiConfig.button) {
+    if (connectionRequired && apiConfig.button) {
         $(apiConfig.button).trigger('click');
     }
 
     const quiet = isTrueBoolean(args?.quiet);
-    const toast = quiet ? jQuery() : toastr.info(`API set to ${text}, trying to connect..`);
+    const toast = quiet ? jQuery() : toastr.info(t`API set to ${text}, trying to connect..`);
 
     try {
         await waitUntilCondition(() => online_status !== 'no_connection', 10000, 100);
@@ -8626,7 +8817,7 @@ export async function processDroppedFiles(files, data = new Map()) {
             const preservedName = data instanceof Map && data.get(file);
             await importCharacter(file, preservedName);
         } else {
-            toastr.warning('Unsupported file type: ' + file.name);
+            toastr.warning(t`Unsupported file type: ` + file.name);
         }
     }
 }
@@ -8639,7 +8830,7 @@ export async function processDroppedFiles(files, data = new Map()) {
  */
 async function importCharacter(file, preserveFileName = '') {
     if (is_group_generating || is_send_press) {
-        toastr.error('Cannot import characters while generating. Stop the request and try again.', 'Import aborted');
+        toastr.error(t`Cannot import characters while generating. Stop the request and try again.`, t`Import aborted`);
         throw new Error('Cannot import character while generating');
     }
 
@@ -8666,7 +8857,7 @@ async function importCharacter(file, preserveFileName = '') {
     });
 
     if (data.error) {
-        toastr.error('The file is likely invalid or corrupted.', 'Could not import character');
+        toastr.error(t`The file is likely invalid or corrupted.`, t`Could not import character`);
         return;
     }
 
@@ -8719,7 +8910,7 @@ async function doImpersonate(args, prompt) {
             await waitUntilCondition(() => !is_send_press && !is_group_generating, 10000, 100);
         } catch {
             console.warn('Timeout waiting for generation unlock');
-            toastr.warning('Cannot run /impersonate command while the reply is being generated.');
+            toastr.warning(t`Cannot run /impersonate command while the reply is being generated.`);
             return '';
         }
 
@@ -8781,19 +8972,19 @@ async function doDeleteChat() {
 
 async function doRenameChat(_, chatName) {
     if (!chatName) {
-        toastr.warning('Name must be provided as an argument to rename this chat.');
+        toastr.warning(t`Name must be provided as an argument to rename this chat.`);
         return '';
     }
 
     const currentChatName = getCurrentChatId();
     if (!currentChatName) {
-        toastr.warning('No chat selected that can be renamed.');
+        toastr.warning(t`No chat selected that can be renamed.`);
         return '';
     }
 
     await renameChat(currentChatName, chatName);
 
-    toastr.success(`Successfully renamed chat to: ${chatName}`);
+    toastr.success(t`Successfully renamed chat to: ${chatName}`);
     return '';
 }
 
@@ -8908,7 +9099,7 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
     for (const key of characterKey) {
         const character = characters.find(x => x.avatar == key);
         if (!character) {
-            toastr.warning(`Character ${key} not found. Skipping deletion.`);
+            toastr.warning(t`Character ${key} not found. Skipping deletion.`);
             continue;
         }
 
@@ -8925,7 +9116,7 @@ export async function deleteCharacter(characterKey, { deleteChats = true } = {})
         });
 
         if (!response.ok) {
-            toastr.error(`${response.status} ${response.statusText}`, 'Failed to delete character');
+            toastr.error(`${response.status} ${response.statusText}`, t`Failed to delete character`);
             continue;
         }
 
@@ -8975,6 +9166,90 @@ async function newAssistantChat() {
 function doTogglePanels() {
     $('#option_settings').trigger('click');
     return '';
+}
+
+/**
+ * Event handler to open a navbar drawer when a drawer open button is clicked.
+ * Handles click events on .drawer-opener elements.
+ * Opens the drawer associated with the clicked button according to the data-target attribute.
+ * @returns {void}
+ */
+function doDrawerOpenClick() {
+    const targetDrawerID = $(this).attr('data-target');
+    const drawer = $(`#${targetDrawerID}`);
+    const drawerToggle = drawer.find('.drawer-toggle');
+    const drawerWasOpenAlready = drawerToggle.parent().find('.drawer-content').hasClass('openDrawer');
+    if (drawerWasOpenAlready || drawer.hasClass('resizing')) { return; }
+    doNavbarIconClick.call(drawerToggle);
+}
+
+/**
+ * Event handler to open or close a navbar drawer when a navbar icon is clicked.
+ * Handles click events on .drawer-toggle elements.
+ * @returns {void}
+ */
+function doNavbarIconClick() {
+    var icon = $(this).find('.drawer-icon');
+    var drawer = $(this).parent().find('.drawer-content');
+    if (drawer.hasClass('resizing')) { return; }
+    var drawerWasOpenAlready = $(this).parent().find('.drawer-content').hasClass('openDrawer');
+    let targetDrawerID = $(this).parent().find('.drawer-content').attr('id');
+    const pinnedDrawerClicked = drawer.hasClass('pinnedOpen');
+
+    if (!drawerWasOpenAlready) { //to open the drawer
+        $('.openDrawer').not('.pinnedOpen').addClass('resizing').slideToggle(200, 'swing', async function () {
+            await delay(50); $(this).closest('.drawer-content').removeClass('resizing');
+        });
+        $('.openIcon').toggleClass('closedIcon openIcon');
+        $('.openDrawer').not('.pinnedOpen').toggleClass('closedDrawer openDrawer');
+        icon.toggleClass('openIcon closedIcon');
+        drawer.toggleClass('openDrawer closedDrawer');
+
+        //console.log(targetDrawerID);
+        if (targetDrawerID === 'right-nav-panel') {
+            $(this).closest('.drawer').find('.drawer-content').addClass('resizing').slideToggle({
+                duration: 200,
+                easing: 'swing',
+                start: function () {
+                    jQuery(this).css('display', 'flex'); //flex needed to make charlist scroll
+                },
+                complete: async function () {
+                    favsToHotswap();
+                    await delay(50);
+                    $(this).closest('.drawer-content').removeClass('resizing');
+                    $('#rm_print_characters_block').trigger('scroll');
+                },
+            });
+        } else {
+            $(this).closest('.drawer').find('.drawer-content').addClass('resizing').slideToggle(200, 'swing', async function () {
+                await delay(50); $(this).closest('.drawer-content').removeClass('resizing');
+            });
+        }
+
+        // Set the height of "autoSetHeight" textareas within the drawer to their scroll height
+        if (!CSS.supports('field-sizing', 'content')) {
+            $(this).closest('.drawer').find('.drawer-content textarea.autoSetHeight').each(async function () {
+                await resetScrollHeight($(this));
+                return;
+            });
+        }
+
+    } else if (drawerWasOpenAlready) { //to close manually
+        icon.toggleClass('closedIcon openIcon');
+
+        if (pinnedDrawerClicked) {
+            $(drawer).addClass('resizing').slideToggle(200, 'swing', async function () {
+                await delay(50); $(this).removeClass('resizing');
+            });
+        }
+        else {
+            $('.openDrawer').not('.pinnedOpen').addClass('resizing').slideToggle(200, 'swing', async function () {
+                await delay(50); $(this).closest('.drawer-content').removeClass('resizing');
+            });
+        }
+
+        drawer.toggleClass('closedDrawer openDrawer');
+    }
 }
 
 function addDebugFunctions() {
@@ -9342,9 +9617,9 @@ jQuery(async function () {
 
     ///// SWIPE BUTTON CLICKS ///////
 
-    $(document).on('click', '.swipe_right', swipe_right);
-
-    $(document).on('click', '.swipe_left', swipe_left);
+    //limit swiping to only last message clicks
+    $(document).on('click', '.last_mes .swipe_right', swipe_right);
+    $(document).on('click', '.last_mes .swipe_left', swipe_left);
 
     const debouncedCharacterSearch = debounce((searchQuery) => {
         entitiesFilter.setFilterData(FILTER_TYPES.SEARCH, searchQuery);
@@ -9547,9 +9822,6 @@ jQuery(async function () {
                 }, 2000);
             }
         }
-        if (popup_type == 'alternate_greeting' && menu_type !== 'create') {
-            createOrEditCharacter();
-        }
 
         if (dialogueResolve) {
             if (popup_type == 'input') {
@@ -9603,12 +9875,7 @@ jQuery(async function () {
 
         let deleteChats = false;
 
-        const confirm = await Popup.show.confirm('Delete the character?', `
-            <b>THIS IS PERMANENT!<br><br>
-                <label for="del_char_checkbox" class="checkbox_label justifyCenter">
-                    <input type="checkbox" id="del_char_checkbox" />
-                    <small>Also delete the chat files</small>
-                </label></b>`, {
+        const confirm = await Popup.show.confirm(t`Delete the character?`, await renderTemplateAsync('deleteConfirm'), {
             onClose: () => deleteChats = !!$('#del_char_checkbox').prop('checked'),
         });
         if (!confirm) {
@@ -9913,6 +10180,8 @@ jQuery(async function () {
         }
 
         else if (id == 'option_continue') {
+            if (this_edit_mes_id) return; // don't proceed if editing a message
+
             if (is_send_press == false || fromSlashCommand) {
                 is_send_press = true;
                 Generate('continue', buildOrFillAdditionalArgs());
@@ -10567,69 +10836,8 @@ jQuery(async function () {
         stopScriptExecution();
     });
 
-    $('.drawer-toggle').on('click', function () {
-        var icon = $(this).find('.drawer-icon');
-        var drawer = $(this).parent().find('.drawer-content');
-        if (drawer.hasClass('resizing')) { return; }
-        var drawerWasOpenAlready = $(this).parent().find('.drawer-content').hasClass('openDrawer');
-        let targetDrawerID = $(this).parent().find('.drawer-content').attr('id');
-        const pinnedDrawerClicked = drawer.hasClass('pinnedOpen');
-
-        if (!drawerWasOpenAlready) { //to open the drawer
-            $('.openDrawer').not('.pinnedOpen').addClass('resizing').slideToggle(200, 'swing', async function () {
-                await delay(50); $(this).closest('.drawer-content').removeClass('resizing');
-            });
-            $('.openIcon').toggleClass('closedIcon openIcon');
-            $('.openDrawer').not('.pinnedOpen').toggleClass('closedDrawer openDrawer');
-            icon.toggleClass('openIcon closedIcon');
-            drawer.toggleClass('openDrawer closedDrawer');
-
-            //console.log(targetDrawerID);
-            if (targetDrawerID === 'right-nav-panel') {
-                $(this).closest('.drawer').find('.drawer-content').addClass('resizing').slideToggle({
-                    duration: 200,
-                    easing: 'swing',
-                    start: function () {
-                        jQuery(this).css('display', 'flex'); //flex needed to make charlist scroll
-                    },
-                    complete: async function () {
-                        favsToHotswap();
-                        await delay(50);
-                        $(this).closest('.drawer-content').removeClass('resizing');
-                        $('#rm_print_characters_block').trigger('scroll');
-                    },
-                });
-            } else {
-                $(this).closest('.drawer').find('.drawer-content').addClass('resizing').slideToggle(200, 'swing', async function () {
-                    await delay(50); $(this).closest('.drawer-content').removeClass('resizing');
-                });
-            }
-
-            // Set the height of "autoSetHeight" textareas within the drawer to their scroll height
-            if (!CSS.supports('field-sizing', 'content')) {
-                $(this).closest('.drawer').find('.drawer-content textarea.autoSetHeight').each(async function () {
-                    await resetScrollHeight($(this));
-                    return;
-                });
-            }
-
-        } else if (drawerWasOpenAlready) { //to close manually
-            icon.toggleClass('closedIcon openIcon');
-
-            if (pinnedDrawerClicked) {
-                $(drawer).addClass('resizing').slideToggle(200, 'swing', async function () {
-                    await delay(50); $(this).removeClass('resizing');
-                });
-            }
-            else {
-                $('.openDrawer').not('.pinnedOpen').addClass('resizing').slideToggle(200, 'swing', async function () {
-                    await delay(50); $(this).closest('.drawer-content').removeClass('resizing');
-                });
-            }
-
-            drawer.toggleClass('closedDrawer openDrawer');
-        }
-    });
+    $(document).on('click', '.drawer-opener', doDrawerOpenClick);
+    $('.drawer-toggle').on('click', doNavbarIconClick);
 
     $('html').on('touchstart mousedown', function (e) {
         var clickTarget = $(e.target);
@@ -10665,7 +10873,7 @@ jQuery(async function () {
                     $('.openDrawer').not('.pinnedOpen').addClass('resizing').slideToggle(200, 'swing', function () {
                         $(this).closest('.drawer-content').removeClass('resizing');
                     });
-                    $('.openIcon').toggleClass('closedIcon openIcon');
+                    $('.openIcon').not('.drawerPinnedOpen').toggleClass('closedIcon openIcon');
                     $('.openDrawer').not('.pinnedOpen').toggleClass('closedDrawer openDrawer');
 
                 }
@@ -10677,10 +10885,12 @@ jQuery(async function () {
         if ($(e.target).hasClass('text_pole')) {
             return;
         }
-        var icon = $(this).find('.inline-drawer-icon');
+        const drawer = $(this).closest('.inline-drawer');
+        const icon = drawer.find('.inline-drawer-icon');
+        const drawerContent = drawer.find('.inline-drawer-content');
         icon.toggleClass('down up');
         icon.toggleClass('fa-circle-chevron-down fa-circle-chevron-up');
-        $(this).closest('.inline-drawer').find('.inline-drawer-content').stop().slideToggle({
+        drawerContent.stop().slideToggle({
             complete: () => {
                 $(this).css('height', '');
             },
@@ -10688,7 +10898,7 @@ jQuery(async function () {
 
         // Set the height of "autoSetHeight" textareas within the inline-drawer to their scroll height
         if (!CSS.supports('field-sizing', 'content')) {
-            $(this).closest('.inline-drawer').find('.inline-drawer-content textarea.autoSetHeight').each(async function () {
+            drawerContent.find('textarea.autoSetHeight').each(async function () {
                 await resetScrollHeight($(this));
                 return;
             });
