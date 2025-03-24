@@ -3,6 +3,9 @@ module.exports = {
     extends: [
         'eslint:recommended',
     ],
+    plugins: [
+        'jsdoc',
+    ],
     env: {
         es6: true,
     },
@@ -18,6 +21,10 @@ module.exports = {
             },
             parserOptions: {
                 sourceType: 'module',
+            },
+            globals: {
+                globalThis: 'readonly',
+                Deno: 'readonly',
             },
         },
         {
@@ -50,23 +57,10 @@ module.exports = {
             },
             // These scripts are loaded in HTML; tell ESLint not to complain about them being undefined
             globals: {
-                DOMPurify: 'readonly',
-                droll: 'readonly',
-                Fuse: 'readonly',
-                Handlebars: 'readonly',
-                hljs: 'readonly',
-                localforage: 'readonly',
-                moment: 'readonly',
-                pdfjsLib: 'readonly',
-                Popper: 'readonly',
-                showdown: 'readonly',
-                showdownKatex: 'readonly',
-                SVGInject: 'readonly',
-                toastr: 'readonly',
-                Readability: 'readonly',
-                isProbablyReaderable: 'readonly',
+                globalThis: 'readonly',
                 ePub: 'readonly',
-                diff_match_patch: 'readonly',
+                pdfjsLib: 'readonly',
+                toastr: 'readonly',
                 SillyTavern: 'readonly',
             },
         },
@@ -84,8 +78,10 @@ module.exports = {
         'plugins/**',
         '**/*.min.js',
         'public/scripts/extensions/quick-reply/lib/**',
+        'public/scripts/extensions/tts/lib/**',
     ],
     rules: {
+        'jsdoc/no-undefined-types': ['warn', { disableReporting: true, markVariablesAsUsed: true }],
         'no-unused-vars': ['error', { args: 'none' }],
         'no-control-regex': 'off',
         'no-constant-condition': ['error', { checkLoops: false }],
@@ -100,6 +96,8 @@ module.exports = {
         'space-infix-ops': 'error',
         'no-unused-expressions': ['error', { allowShortCircuit: true, allowTernary: true }],
         'no-cond-assign': 'error',
+        'no-unneeded-ternary': 'error',
+        'no-irregular-whitespace': ['error', { skipStrings: true, skipTemplates: true }],
 
         // These rules should eventually be enabled.
         'no-async-promise-executor': 'off',

@@ -1,7 +1,6 @@
 import {
     characters,
     saveChat,
-    system_messages,
     system_message_types,
     this_chid,
     openCharacterChat,
@@ -13,7 +12,7 @@ import {
     saveChatConditional,
     saveItemizedPrompts,
 } from '../script.js';
-import { humanizedDateTime, getMessageTimeStamp } from './RossAscends-mods.js';
+import { humanizedDateTime } from './RossAscends-mods.js';
 import {
     getGroupPastChats,
     group_activation_strategy,
@@ -32,6 +31,7 @@ import { commonEnumProviders } from './slash-commands/SlashCommandCommonEnumsPro
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { createTagMapFromList } from './tags.js';
 import { renderTemplateAsync } from './templates.js';
+import { t } from './i18n.js';
 
 import {
     getUniqueName,
@@ -155,7 +155,7 @@ export async function createBranch(mesId) {
     if (selected_group) {
         await saveGroupBookmarkChat(selected_group, name, newMetadata, mesId);
     } else {
-        await saveChat(name, newMetadata, mesId);
+        await saveChat({ chatName: name, withMetadata: newMetadata, mesId });
     }
     // append to branches list if it exists
     // otherwise create it
@@ -211,7 +211,7 @@ export async function createNewBookmark(mesId, { forceName = null } = {}) {
     if (selected_group) {
         await saveGroupBookmarkChat(selected_group, name, newMetadata, mesId);
     } else {
-        await saveChat(name, newMetadata, mesId);
+        await saveChat({ chatName: name, withMetadata: newMetadata, mesId });
     }
 
     lastMes.extra['bookmark_link'] = name;
@@ -263,7 +263,7 @@ export async function convertSoloToGroupChat() {
         return;
     }
 
-    const confirm = await Popup.show.confirm('Convert to group chat', 'Are you sure you want to convert this chat to a group chat?<br />This cannot be reverted.');
+    const confirm = await Popup.show.confirm(t`Convert to group chat`, t`Are you sure you want to convert this chat to a group chat?` + '<br />' + t`This cannot be reverted.`);
     if (!confirm) {
         return;
     }
@@ -317,16 +317,6 @@ export async function convertSoloToGroupChat() {
     const groupChat = chat.slice();
     const genIdFirst = Date.now();
 
-    // Add something if the chat is empty
-    if (groupChat.length === 0) {
-        const newMessage = {
-            ...system_messages[system_message_types.GROUP],
-            send_date: getMessageTimeStamp(),
-            extra: { type: system_message_types.GROUP },
-        };
-        groupChat.push(newMessage);
-    }
-
     for (let index = 0; index < groupChat.length; index++) {
         const message = groupChat[index];
 
@@ -367,7 +357,7 @@ export async function convertSoloToGroupChat() {
     // Click on the freshly selected group to open it
     await openGroupById(group.id);
 
-    toastr.success('The chat has been successfully converted!');
+    toastr.success(t`The chat has been successfully converted!`);
 }
 
 /**
@@ -636,7 +626,6 @@ export function initBookmarks() {
         }
 
         $('#shadow_select_chat_popup').css('display', 'none');
-        $('#load_select_chat_div').css('display', 'block');
     });
 
     $(document).on('click', '.mes_create_bookmark', async function () {

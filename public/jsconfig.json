@@ -5,7 +5,8 @@
         "module": "ESNext",
         "moduleResolution": "node",
         "allowUmdGlobalAccess": true,
-        "allowSyntheticDefaultImports": true
+        "allowSyntheticDefaultImports": true,
+        "strictBindCallApply": true
     },
     "exclude": [
         "**/node_modules/**",
@@ -13,20 +14,10 @@
         "**/.git/**",
         "lib/**",
         "**/*.min.js",
-        "scripts/extensions/quick-reply/lib/**"
+        "scripts/extensions/quick-reply/lib/**",
+        "scripts/extensions/tts/lib/**"
     ],
     "typeAcquisition": {
-        "include": [
-            "@popperjs/core",
-            "showdown",
-            "seedrandom",
-            "showdown-katex",
-            "droll",
-            "handlebars",
-            "highlight.js",
-            "localforage",
-            "pdfjs-dist",
-            "@mozilla/readability"
-        ]
+        "include": []
     }
 }

@@ -10,11 +10,16 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getAllUserHandles, getUserDirectories } from '../users.js';
 import { getConfigValue } from '../util.js';
-import { jsonParser } from '../express-common.js';
 
-const thumbnailsDisabled = getConfigValue('disableThumbnails', false);
-const quality = getConfigValue('thumbnailsQuality', 95);
-const pngFormat = getConfigValue('avatarThumbnailsPng', false);
+const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean');
+const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
+const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
+
+/** @type {Record<string, number[]>} */
+const dimensions = {
+    'bg': getConfigValue('thumbnails.dimensions.bg', [160, 90]),
+    'avatar': getConfigValue('thumbnails.dimensions.avatar', [96, 144]),
+};
 
 /**
  * Gets a path to thumbnail folder based on the type.
@@ -86,7 +91,6 @@ async function generateThumbnail(directories, type, file) {
     let thumbnailFolder = getThumbnailFolder(directories, type);
     let originalFolder = getOriginalFolder(directories, type);
     if (thumbnailFolder === undefined || originalFolder === undefined) throw new Error('Invalid thumbnail type');
-
     const pathToCachedFile = path.join(thumbnailFolder, file);
     const pathToOriginalFile = path.join(originalFolder, file);
 
@@ -101,7 +105,7 @@ async function generateThumbnail(directories, type, file) {
         const cachedStat = fs.statSync(pathToCachedFile);
 
         if (originalStat.mtimeMs > cachedStat.ctimeMs) {
-            //console.log('Original file changed. Regenerating thumbnail...');
+            //console.warn('Original file changed. Regenerating thumbnail...');
             shouldRegenerate = true;
         }
     }
@@ -114,16 +118,16 @@ async function generateThumbnail(directories, type, file) {
         return null;
     }
 
-    const imageSizes = { 'bg': [160, 90], 'avatar': [96, 144] };
-    const mySize = imageSizes[type];
-
     try {
         let buffer;
 
         try {
+            const size = dimensions[type];
             const image = await jimp.read(pathToOriginalFile);
             const imgType = type == 'avatar' && pngFormat ? 'image/png' : 'image/jpeg';
-            buffer = await image.cover(mySize[0], mySize[1]).quality(quality).getBufferAsync(imgType);
+            const width = !isNaN(size?.[0]) && size?.[0] > 0 ? size[0] : image.bitmap.width;
+            const height = !isNaN(size?.[1]) && size?.[1] > 0 ? size[1] : image.bitmap.height;
+            buffer = await image.cover(width, height).quality(quality).getBufferAsync(imgType);
         }
         catch (inner) {
             console.warn(`Thumbnailer can not process the image: ${pathToOriginalFile}. Using original size`);
@@ -154,7 +158,7 @@ export async function ensureThumbnailCache() {
             return;
         }
 
-        console.log('Generating thumbnails cache. Please wait...');
+        console.info('Generating thumbnails cache. Please wait...');
 
         const bgFiles = fs.readdirSync(directories.backgrounds);
         const tasks = [];
@@ -164,14 +168,14 @@ export async function ensureThumbnailCache() {
         }
 
         await Promise.all(tasks);
-        console.log(`Done! Generated: ${bgFiles.length} preview images`);
+        console.info(`Done! Generated: ${bgFiles.length} preview images`);
     }
 }
 
 export const router = express.Router();
 
 // Important: This route must be mounted as '/thumbnail'. It is used in the client code and saved to chat files.
-router.get('/', jsonParser, async function (request, response) {
+router.get('/', async function (request, response) {
     try{
         if (typeof request.query.file !== 'string' || typeof request.query.type !== 'string') {
             return response.sendStatus(400);
@@ -193,7 +197,7 @@ router.get('/', jsonParser, async function (request, response) {
             return response.sendStatus(403);
         }
 
-        if (thumbnailsDisabled) {
+        if (!thumbnailsEnabled) {
             const folder = getOriginalFolder(request.user.directories, type);
 
             if (folder === undefined) {
