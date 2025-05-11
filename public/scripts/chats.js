@@ -459,7 +459,7 @@ export async function appendFileContent(message, messageText) {
  * @copyright https://github.com/kwaroran/risuAI
  */
 export function encodeStyleTags(text) {
-    const styleRegex = /<style>(.+?)<\/style>/gms;
+    const styleRegex = /<style>(.+?)<\/style>/gims;
     return text.replaceAll(styleRegex, (_, match) => {
         return `<custom-style>${escape(match)}</custom-style>`;
     });
@@ -575,8 +575,8 @@ export function isExternalMediaAllowed() {
     return !power_user.forbid_external_media;
 }
 
-async function enlargeMessageImage() {
-    const mesBlock = $(this).closest('.mes');
+function expandMessageImage(event) {
+    const mesBlock = $(event.currentTarget).closest('.mes');
     const mesId = mesBlock.attr('mesid');
     const message = chat[mesId];
     const imgSrc = message?.extra?.image;
@@ -620,7 +620,12 @@ async function enlargeMessageImage() {
         popup.completeCancelled();
     });
 
-    await popup.show();
+    popup.show();
+    return img;
+}
+
+function expandAndZoomMessageImage(event) {
+    expandMessageImage(event).click();
 }
 
 async function deleteMessageImage() {
@@ -1571,7 +1576,8 @@ jQuery(function () {
         await callGenericPopup(wrapper, POPUP_TYPE.TEXT, '', { wide: true, large: true });
     });
 
-    $(document).on('click', 'body.documentstyle .mes .mes_text', function () {
+    $(document).on('click', 'body .mes .mes_text', function () {
+        if (!power_user.click_to_edit) return;
         if (window.getSelection().toString()) return;
         if ($('.edit_textarea').length) return;
         $(this).closest('.mes').find('.mes_edit').trigger('click');
@@ -1603,7 +1609,8 @@ jQuery(function () {
         reloadCurrentChat();
     });
 
-    $(document).on('click', '.mes_img_enlarge', enlargeMessageImage);
+    $(document).on('click', '.mes_img', expandMessageImage);
+    $(document).on('click', '.mes_img_enlarge', expandAndZoomMessageImage);
     $(document).on('click', '.mes_img_delete', deleteMessageImage);
 
     $('#file_form_input').on('change', async () => {

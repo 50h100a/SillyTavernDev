@@ -208,44 +208,51 @@ export function autoSelectInstructPreset(modelId) {
 
     // Select matching instruct preset
     let foundMatch = false;
-    for (const instruct_preset of instruct_presets) {
-        // If instruct preset matches the context template
-        if (power_user.instruct.bind_to_context && instruct_preset.name === power_user.context.preset) {
-            foundMatch = true;
-            selectInstructPreset(instruct_preset.name, { isAuto: true });
-            break;
-        }
-    }
-    // If no match was found, auto-select instruct preset
-    if (!foundMatch) {
-        for (const preset of instruct_presets) {
-            // If activation regex is set, check if it matches the model id
-            if (preset.activation_regex) {
-                try {
-                    const regex = regexFromString(preset.activation_regex);
 
-                    // Stop on first match so it won't cycle back and forth between presets if multiple regexes match
-                    if (regex instanceof RegExp && regex.test(modelId)) {
-                        selectInstructPreset(preset.name, { isAuto: true });
+    for (const preset of instruct_presets) {
+        // If activation regex is set, check if it matches the model id
+        if (preset.activation_regex) {
+            try {
+                const regex = regexFromString(preset.activation_regex);
 
-                        return true;
-                    }
-                } catch {
-                    // If regex is invalid, ignore it
-                    console.warn(`Invalid instruct activation regex in preset "${preset.name}"`);
+                // Stop on first match so it won't cycle back and forth between presets if multiple regexes match
+                if (regex instanceof RegExp && regex.test(modelId)) {
+                    selectInstructPreset(preset.name, { isAuto: true });
+                    foundMatch = true;
+                    break;
                 }
+            } catch {
+                // If regex is invalid, ignore it
+                console.warn(`Invalid instruct activation regex in preset "${preset.name}"`);
             }
         }
     }
 
-    return false;
+    // If no match was found, auto-select instruct preset
+    if (!foundMatch && power_user.instruct.bind_to_context) {
+        for (const instruct_preset of instruct_presets) {
+            // If instruct preset matches the context template
+            if (instruct_preset.name === power_user.context.preset) {
+                selectInstructPreset(instruct_preset.name, { isAuto: true });
+                foundMatch = true;
+                break;
+            }
+        }
+    }
+
+    return foundMatch;
 }
 
 /**
  * Converts instruct mode sequences to an array of stopping strings.
+ * @param {Object} options
+ * @param {InstructSettings?} [options.customInstruct=null] - Custom instruct settings.
+ * @param {boolean?} [options.useStopStrings] - Decides whether to use "Chat Start" and "Example Separator"
  * @returns {string[]} Array of instruct mode stopping strings.
  */
-export function getInstructStoppingSequences() {
+export function getInstructStoppingSequences({ customInstruct = null, useStopStrings = null } = {}) {
+    const instruct = structuredClone(customInstruct ?? power_user.instruct);
+
     /**
      * Adds instruct mode sequence to the result array.
      * @param {string} sequence Sequence string.
@@ -254,7 +261,7 @@ export function getInstructStoppingSequences() {
     function addInstructSequence(sequence) {
         // Cohee: oobabooga's textgen always appends newline before the sequence as a stopping string
         // But it's a problem for Metharme which doesn't use newlines to separate them.
-        const wrap = (s) => power_user.instruct.wrap ? '\n' + s : s;
+        const wrap = (s) => instruct.wrap ? '\n' + s : s;
         // Sequence must be a non-empty string
         if (typeof sequence === 'string' && sequence.length > 0) {
             // If sequence is just a whitespace or newline - we don't want to make it a stopping string
@@ -262,7 +269,7 @@ export function getInstructStoppingSequences() {
             if (sequence.trim().length > 0) {
                 const wrappedSequence = wrap(sequence);
                 // Need to respect "insert macro" setting
-                const stopString = power_user.instruct.macro ? substituteParams(wrappedSequence) : wrappedSequence;
+                const stopString = instruct.macro ? substituteParams(wrappedSequence) : wrappedSequence;
                 result.push(stopString);
             }
         }
@@ -270,14 +277,15 @@ export function getInstructStoppingSequences() {
 
     const result = [];
 
-    if (power_user.instruct.enabled) {
-        const stop_sequence = power_user.instruct.stop_sequence || '';
-        const input_sequence = power_user.instruct.input_sequence?.replace(/{{name}}/gi, name1) || '';
-        const output_sequence = power_user.instruct.output_sequence?.replace(/{{name}}/gi, name2) || '';
-        const first_output_sequence = power_user.instruct.first_output_sequence?.replace(/{{name}}/gi, name2) || '';
-        const last_output_sequence = power_user.instruct.last_output_sequence?.replace(/{{name}}/gi, name2) || '';
-        const system_sequence = power_user.instruct.system_sequence?.replace(/{{name}}/gi, 'System') || '';
-        const last_system_sequence = power_user.instruct.last_system_sequence?.replace(/{{name}}/gi, 'System') || '';
+    // Since preset's don't have "enabled", we assume it's always enabled
+    if (customInstruct ?? instruct.enabled) {
+        const stop_sequence = instruct.stop_sequence || '';
+        const input_sequence = instruct.input_sequence?.replace(/{{name}}/gi, name1) || '';
+        const output_sequence = instruct.output_sequence?.replace(/{{name}}/gi, name2) || '';
+        const first_output_sequence = instruct.first_output_sequence?.replace(/{{name}}/gi, name2) || '';
+        const last_output_sequence = instruct.last_output_sequence?.replace(/{{name}}/gi, name2) || '';
+        const system_sequence = instruct.system_sequence?.replace(/{{name}}/gi, 'System') || '';
+        const last_system_sequence = instruct.last_system_sequence?.replace(/{{name}}/gi, 'System') || '';
 
         const combined_sequence = [
             stop_sequence,
@@ -292,7 +300,7 @@ export function getInstructStoppingSequences() {
         combined_sequence.split('\n').filter((line, index, self) => self.indexOf(line) === index).forEach(addInstructSequence);
     }
 
-    if (power_user.context.use_stop_strings) {
+    if (useStopStrings ?? power_user.context.use_stop_strings) {
         if (power_user.context.chat_start) {
             result.push(`\n${substituteParams(power_user.context.chat_start)}`);
         }

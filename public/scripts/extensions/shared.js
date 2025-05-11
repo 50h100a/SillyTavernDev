@@ -1,7 +1,7 @@
 import { CONNECT_API_MAP, getRequestHeaders } from '../../script.js';
 import { extension_settings, openThirdPartyExtensionMenu } from '../extensions.js';
 import { t } from '../i18n.js';
-import { oai_settings } from '../openai.js';
+import { oai_settings, proxies } from '../openai.js';
 import { SECRET_KEYS, secret_state } from '../secrets.js';
 import { textgen_types, textgenerationwebui_settings } from '../textgen-settings.js';
 import { getTokenCountAsync } from '../tokenizers.js';
@@ -22,7 +22,7 @@ export async function getMultimodalCaption(base64Img, prompt) {
 
     throwIfInvalidModel(useReverseProxy);
 
-    const noPrefix = ['ollama', 'llamacpp'].includes(extension_settings.caption.multimodal_api);
+    const noPrefix = ['ollama'].includes(extension_settings.caption.multimodal_api);
 
     if (noPrefix && base64Img.startsWith('data:image/')) {
         base64Img = base64Img.split(',')[1];
@@ -97,8 +97,6 @@ export async function getMultimodalCaption(base64Img, prompt) {
                 return '/api/google/caption-image';
             case 'anthropic':
                 return '/api/anthropic/caption-image';
-            case 'llamacpp':
-                return '/api/backends/text-completions/llamacpp/caption-image';
             case 'ollama':
                 return '/api/backends/text-completions/ollama/caption-image';
             default:
@@ -151,6 +149,10 @@ function throwIfInvalidModel(useReverseProxy) {
 
     if (extension_settings.caption.multimodal_api === 'cohere' && !secret_state[SECRET_KEYS.COHERE]) {
         throw new Error('Cohere API key is not set.');
+    }
+
+    if (extension_settings.caption.multimodal_api === 'xai' && !secret_state[SECRET_KEYS.XAI]) {
+        throw new Error('xAI API key is not set.');
     }
 
     if (extension_settings.caption.multimodal_api === 'ollama' && !textgenerationwebui_settings.server_urls[textgen_types.OLLAMA]) {
@@ -285,6 +287,7 @@ export class ConnectionManagerRequestService {
         extractData: true,
         includePreset: true,
         includeInstruct: true,
+        instructSettings: {},
     };
 
     static getAllowedTypes() {
@@ -298,11 +301,18 @@ export class ConnectionManagerRequestService {
      * @param {string} profileId
      * @param {string | (import('../custom-request.js').ChatCompletionMessage & {ignoreInstruct?: boolean})[]} prompt
      * @param {number} maxTokens
-     * @param {{stream?: boolean, signal?: AbortSignal, extractData?: boolean, includePreset?: boolean, includeInstruct?: boolean}} custom - default values are true
+     * @param {Object} custom
+     * @param {boolean?} [custom.stream=false]
+     * @param {AbortSignal?} [custom.signal]
+     * @param {boolean?} [custom.extractData=true]
+     * @param {boolean?} [custom.includePreset=true]
+     * @param {boolean?} [custom.includeInstruct=true]
+     * @param {Partial<InstructSettings>?} [custom.instructSettings] Override instruct settings
+     * @param {Record<string, any>} [overridePayload] - Override payload for the request
      * @returns {Promise<import('../custom-request.js').ExtractedData | (() => AsyncGenerator<import('../custom-request.js').StreamResponse>)>} If not streaming, returns extracted data; if streaming, returns a function that creates an AsyncGenerator
      */
-    static async sendRequest(profileId, prompt, maxTokens, custom = this.defaultSendRequestParams) {
-        const { stream, signal, extractData, includePreset, includeInstruct } = { ...this.defaultSendRequestParams, ...custom };
+    static async sendRequest(profileId, prompt, maxTokens, custom = this.defaultSendRequestParams, overridePayload = {}) {
+        const { stream, signal, extractData, includePreset, includeInstruct, instructSettings } = { ...this.defaultSendRequestParams, ...custom };
 
         const context = SillyTavern.getContext();
         if (context.extensionSettings.disabledExtensions.includes('connection-manager')) {
@@ -319,6 +329,8 @@ export class ConnectionManagerRequestService {
                         throw new Error(`API type ${selectedApiMap.selected} does not support chat completions`);
                     }
 
+                    const proxyPreset = proxies.find((p) => p.name === profile.proxy);
+
                     const messages = Array.isArray(prompt) ? prompt : [{ role: 'user', content: prompt }];
                     return await context.ChatCompletionService.processRequest({
                         stream,
@@ -327,6 +339,9 @@ export class ConnectionManagerRequestService {
                         model: profile.model,
                         chat_completion_source: selectedApiMap.source,
                         custom_url: profile['api-url'],
+                        reverse_proxy: proxyPreset?.url,
+                        proxy_password: proxyPreset?.password,
+                        ...overridePayload,
                     }, {
                         presetName: includePreset ? profile.preset : undefined,
                     }, extractData, signal);
@@ -343,9 +358,11 @@ export class ConnectionManagerRequestService {
                         model: profile.model,
                         api_type: selectedApiMap.type,
                         api_server: profile['api-url'],
+                        ...overridePayload,
                     }, {
                         instructName: includeInstruct ? profile.instruct : undefined,
                         presetName: includePreset ? profile.preset : undefined,
+                        instructSettings: includeInstruct ? instructSettings : undefined,
                     }, extractData, signal);
                 }
                 default: {
@@ -376,7 +393,7 @@ export class ConnectionManagerRequestService {
      * @returns {boolean}
      */
     static isProfileSupported(profile) {
-        if (!profile) {
+        if (!profile || !profile.api) {
             return false;
         }
 

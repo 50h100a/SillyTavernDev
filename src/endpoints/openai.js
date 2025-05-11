@@ -45,6 +45,10 @@ router.post('/caption-image', async (request, response) => {
             key = readSecret(request.user.directories, SECRET_KEYS.KOBOLDCPP);
         }
 
+        if (request.body.api === 'llamacpp') {
+            key = readSecret(request.user.directories, SECRET_KEYS.LLAMACPP);
+        }
+
         if (request.body.api === 'vllm') {
             key = readSecret(request.user.directories, SECRET_KEYS.VLLM);
         }
@@ -65,7 +69,12 @@ router.post('/caption-image', async (request, response) => {
             key = readSecret(request.user.directories, SECRET_KEYS.COHERE);
         }
 
-        if (!key && !request.body.reverse_proxy && ['custom', 'ooba', 'koboldcpp', 'vllm'].includes(request.body.api) === false) {
+        if (request.body.api === 'xai') {
+            key = readSecret(request.user.directories, SECRET_KEYS.XAI);
+        }
+
+        const noKeyTypes = ['custom', 'ooba', 'koboldcpp', 'vllm', 'llamacpp', 'pollinations'];
+        if (!key && !request.body.reverse_proxy && !noKeyTypes.includes(request.body.api)) {
             console.warn('No key found for API', request.body.api);
             return response.sendStatus(400);
         }
@@ -134,6 +143,14 @@ router.post('/caption-image', async (request, response) => {
             apiUrl = 'https://api.cohere.ai/v2/chat';
         }
 
+        if (request.body.api === 'xai') {
+            apiUrl = 'https://api.x.ai/v1/chat/completions';
+        }
+
+        if (request.body.api === 'pollinations') {
+            apiUrl = 'https://text.pollinations.ai/openai/chat/completions';
+        }
+
         if (request.body.api === 'ooba') {
             apiUrl = `${trimV1(request.body.server_url)}/v1/chat/completions`;
             const imgMessage = body.messages.pop();
@@ -148,7 +165,7 @@ router.post('/caption-image', async (request, response) => {
             });
         }
 
-        if (request.body.api === 'koboldcpp' || request.body.api === 'vllm') {
+        if (['koboldcpp', 'vllm', 'llamacpp'].includes(request.body.api)) {
             apiUrl = `${trimV1(request.body.server_url)}/v1/chat/completions`;
         }
 
@@ -226,7 +243,7 @@ router.post('/transcribe-audio', async (request, response) => {
             return response.status(500).send(text);
         }
 
-        fs.rmSync(request.file.path);
+        fs.unlinkSync(request.file.path);
         const data = await result.json();
         console.debug('OpenAI transcription response', data);
         return response.json(data);

@@ -50,6 +50,8 @@ import {
     unshallowCharacter,
     deleteLastMessage,
     getCharacterCardFields,
+    swipe_right,
+    swipe_left,
 } from '../script.js';
 import {
     extension_settings,
@@ -83,6 +85,7 @@ import { convertCharacterBook, getWorldInfoPrompt, loadWorldInfo, reloadEditor, 
 import { ChatCompletionService, TextCompletionService } from './custom-request.js';
 import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { updateReasoningUI, parseReasoningFromString } from './reasoning.js';
+import { IGNORE_SYMBOL } from './constants.js';
 
 export function getContext() {
     return {
@@ -195,6 +198,7 @@ export function getContext() {
         humanizedDateTime,
         updateMessageBlock,
         appendMediaToMessage,
+        swipe: { left: swipe_left, right: swipe_right },
         variables: {
             local: {
                 get: getLocalVariable,
@@ -225,6 +229,9 @@ export function getContext() {
         parseReasoningFromString,
         unshallowCharacter,
         unshallowGroupMembers,
+        symbols: {
+            ignore: IGNORE_SYMBOL,
+        },
     };
 }
 

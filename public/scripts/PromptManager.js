@@ -1,6 +1,6 @@
 'use strict';
 
-import { DOMPurify, Popper } from '../lib.js';
+import { DOMPurify } from '../lib.js';
 
 import { event_types, eventSource, is_send_press, main_api, substituteParams } from '../script.js';
 import { is_group_generating } from './group-chats.js';
@@ -86,15 +86,15 @@ class Prompt {
      * @param {string} param0.identifier - The unique identifier of the prompt.
      * @param {string} param0.role - The role associated with the prompt.
      * @param {string} param0.content - The content of the prompt.
-     * @param {string} param0.name - The name of the prompt.
-     * @param {boolean} param0.system_prompt - Indicates if the prompt is a system prompt.
-     * @param {string} param0.position - The position of the prompt in the prompt list.
-     * @param {number} param0.injection_position - The insert position of the prompt.
-     * @param {number} param0.injection_depth - The depth of the prompt in the chat.
-     * @param {boolean} param0.forbid_overrides - Indicates if the prompt should not be overridden.
-     * @param {boolean} param0.extension - Prompt is added by an extension.
+     * @param {string} [param0.name] - The name of the prompt.
+     * @param {boolean} [param0.system_prompt] - Indicates if the prompt is a system prompt.
+     * @param {string} [param0.position] - The position of the prompt in the prompt list.
+     * @param {number} [param0.injection_position] - The insert position of the prompt.
+     * @param {number} [param0.injection_depth] - The depth of the prompt in the chat.
+     * @param {boolean} [param0.forbid_overrides] - Indicates if the prompt should not be overridden.
+     * @param {boolean} [param0.extension] - Prompt is added by an extension.
      */
-    constructor({ identifier, role, content, name, system_prompt, position, injection_depth, injection_position, forbid_overrides, extension } = {}) {
+    constructor({ identifier, role, content, name, system_prompt, position, injection_depth, injection_position, forbid_overrides, extension }) {
         this.identifier = identifier;
         this.role = role;
         this.content = content;
@@ -196,6 +196,17 @@ export class PromptCollection {
 }
 
 class PromptManager {
+    get promptSources() {
+        return {
+            charDescription: t`Character Description`,
+            charPersonality: t`Character Personality`,
+            scenario: t`Character Scenario`,
+            personaDescription: t`Persona Description`,
+            worldInfoBefore: t`World Info (↑Char)`,
+            worldInfoAfter: t`World Info (↓Char)`,
+        };
+    }
+
     constructor() {
         this.systemPrompts = [
             'main',
@@ -408,6 +419,7 @@ class PromptManager {
         this.handleResetPrompt = (event) => {
             const promptId = event.target.dataset.pmPrompt;
             const prompt = this.getPromptById(promptId);
+            const isPulledPrompt = Object.keys(this.promptSources).includes(promptId);
 
             switch (promptId) {
                 case 'main':
@@ -439,6 +451,12 @@ class PromptManager {
             document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides').checked = prompt.forbid_overrides ?? false;
             document.getElementById(this.configuration.prefix + 'prompt_manager_forbid_overrides_block').style.visibility = this.overridablePrompts.includes(prompt.identifier) ? 'visible' : 'hidden';
             document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_prompt').disabled = prompt.marker ?? false;
+            document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source_block').style.display = isPulledPrompt ? '' : 'none';
+
+            if (isPulledPrompt) {
+                const sourceName = this.promptSources[promptId];
+                document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source').textContent = sourceName;
+            }
 
             if (!this.systemPrompts.includes(promptId)) {
                 document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_injection_position').removeAttribute('disabled');
@@ -1207,6 +1225,9 @@ class PromptManager {
         const injectionDepthBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_depth_block');
         const forbidOverridesField = document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides');
         const forbidOverridesBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_forbid_overrides_block');
+        const entrySourceBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source_block');
+        const entrySource = document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source');
+        const isPulledPrompt = Object.keys(this.promptSources).includes(prompt.identifier);
 
         nameField.value = prompt.name ?? '';
         roleField.value = prompt.role || 'system';
@@ -1218,6 +1239,12 @@ class PromptManager {
         injectionPositionField.removeAttribute('disabled');
         forbidOverridesField.checked = prompt.forbid_overrides ?? false;
         forbidOverridesBlock.style.visibility = this.overridablePrompts.includes(prompt.identifier) ? 'visible' : 'hidden';
+        entrySourceBlock.style.display = isPulledPrompt ? '' : 'none';
+
+        if (isPulledPrompt) {
+            const sourceName = this.promptSources[prompt.identifier];
+            entrySource.textContent = sourceName;
+        }
 
         if (this.systemPrompts.includes(prompt.identifier)) {
             injectionPositionField.setAttribute('disabled', 'disabled');
@@ -1303,6 +1330,8 @@ class PromptManager {
         const injectionDepthBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_depth_block');
         const forbidOverridesField = document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_form_forbid_overrides');
         const forbidOverridesBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_forbid_overrides_block');
+        const entrySourceBlock = document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source_block');
+        const entrySource = document.getElementById(this.configuration.prefix + 'prompt_manager_popup_entry_source');
 
         nameField.value = '';
         roleField.selectedIndex = 0;
@@ -1314,6 +1343,8 @@ class PromptManager {
         injectionDepthBlock.style.visibility = 'unset';
         forbidOverridesBlock.style.visibility = 'unset';
         forbidOverridesField.checked = false;
+        entrySourceBlock.style.display = 'none';
+        entrySource.textContent = '';
 
         roleField.disabled = false;
     }
@@ -1440,36 +1471,8 @@ class PromptManager {
             footerDiv.querySelector('select').selectedIndex = selectedPromptIndex;
 
             // Add prompt export dialogue and options
-
-            const exportForCharacter = await renderTemplateAsync('promptManagerExportForCharacter');
-            const exportPopup = await renderTemplateAsync('promptManagerExportPopup', { isGlobalStrategy: 'global' === this.configuration.promptOrder.strategy, exportForCharacter });
-            rangeBlockDiv.insertAdjacentHTML('beforeend', exportPopup);
-
-            // Destroy previous popper instance if it exists
-            if (this.exportPopper) {
-                this.exportPopper.destroy();
-            }
-
-            this.exportPopper = Popper.createPopper(
-                document.getElementById('prompt-manager-export'),
-                document.getElementById('prompt-manager-export-format-popup'),
-                { placement: 'bottom' },
-            );
-
-            const showExportSelection = () => {
-                const popup = document.getElementById('prompt-manager-export-format-popup');
-                const show = popup.hasAttribute('data-show');
-
-                if (show) popup.removeAttribute('data-show');
-                else popup.setAttribute('data-show', '');
-
-                this.exportPopper.update();
-            };
-
             footerDiv.querySelector('#prompt-manager-import').addEventListener('click', this.handleImport);
-            footerDiv.querySelector('#prompt-manager-export').addEventListener('click', showExportSelection);
-            rangeBlockDiv.querySelector('.export-promptmanager-prompts-full').addEventListener('click', this.handleFullExport);
-            rangeBlockDiv.querySelector('.export-promptmanager-prompts-character')?.addEventListener('click', this.handleCharacterExport);
+            footerDiv.querySelector('#prompt-manager-export').addEventListener('click', this.handleFullExport);
         }
     }
 
