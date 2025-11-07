@@ -1602,7 +1602,7 @@ export async function getTextGenGenerationData(finalPrompt, maxTokens, isImperso
         'min_tokens': settings.min_length,
         'skip_special_tokens': settings.skip_special_tokens,
         'spaces_between_special_tokens': settings.spaces_between_special_tokens,
-        'guided_grammar': settings.grammar_string,
+        'guided_grammar': settings.grammar_string ? settings.grammar_string : undefined,
         'guided_json': settings.json_schema ? settings.json_schema : undefined,
         'early_stopping': false, // hacks
         'include_stop_str_in_output': false,
